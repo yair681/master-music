@@ -36,11 +36,42 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # The debug keystore lives only on the runner and in the Actions cache,
+      # never in git. Reusing it keeps the signature stable so that updates
+      # install over the previous build.
+      - name: Restore CI debug keystore
+        id: ci_keystore
+        uses: actions/cache/restore@v6
+        with:
+          path: app/ci-debug.keystore
+          key: ci-debug-keystore-v1
+
+      - name: Generate CI debug keystore if not cached
+        if: steps.ci_keystore.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkeypair -v \
+            -keystore app/ci-debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Master Music CI Debug,O=Master Music,C=US"
+
+      - name: Save CI debug keystore
+        if: steps.ci_keystore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: app/ci-debug.keystore
+          key: ${{ steps.ci_keystore.outputs.cache-primary-key }}
+
       - name: Build Debug APK
         run: ./gradlew --console=plain assembleFossDebug --warning-mode summary
         env:
           METROLIST_APPLICATION_ID: com.metrolist.music.test
           METROLIST_APP_NAME: Metrolist Testing
+          METROLIST_DEBUG_KEYSTORE_PATH: ci-debug.keystore
           PULL_REQUEST: "false"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
