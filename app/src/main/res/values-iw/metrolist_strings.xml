@@ -662,4 +662,8 @@
     <string name="dj_live_visualizer">ויזואלייזר חי</string>
     <string name="dj_enable_live_visualizer">הקש כדי לסנכרן את האורות למוזיקה</string>
     <string name="dj_unavailable_casting">מצב DJ אינו זמין בזמן שידור למכשיר אחר</string>
+    <string name="dj_fx_unavailable">האפקטים אינם זמינים בפורמט השמע של השיר הזה.</string>
+    <string name="dj_fx_intensity">עוצמה</string>
+    <string name="dj_auto_fx">אפקטים אוטומטיים</string>
+    <string name="dj_smart_transitions">מעברים חכמים</string>
 </resources>

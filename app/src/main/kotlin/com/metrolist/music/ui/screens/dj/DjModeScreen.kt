@@ -11,7 +11,11 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -109,7 +113,8 @@ fun DjModeScreen(navController: NavController) {
             service.startDjMode()
         }
     }
-    BackHandler { exitDj() }
+    var showFx by remember { mutableStateOf(false) }
+    BackHandler { if (showFx) showFx = false else exitDj() }
 
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(C.TIME_UNSET) }
@@ -276,6 +281,20 @@ fun DjModeScreen(navController: NavController) {
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "FX",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 2.sp,
+                    modifier =
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Brush.horizontalGradient(listOf(DjPurple, DjPink)))
+                            .clickable { showFx = true }
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                )
             }
 
             Spacer(Modifier.weight(1f))
@@ -497,6 +516,27 @@ fun DjModeScreen(navController: NavController) {
                     )
                 }
             }
+        }
+
+        if (showFx) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { showFx = false },
+            )
+        }
+        AnimatedVisibility(
+            visible = showFx,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            DjFxPanel(engine = service.djFx, onClose = { showFx = false })
         }
     }
 }

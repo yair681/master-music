@@ -30,6 +30,7 @@ import android.net.ConnectivityManager
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -197,6 +198,9 @@ import com.metrolist.music.models.toMediaMetadata
 import com.metrolist.music.playback.alarm.MusicAlarmScheduler
 import com.metrolist.music.playback.alarm.MusicAlarmStore
 import com.metrolist.music.playback.audio.SilenceDetectorAudioProcessor
+import com.metrolist.music.playback.audio.DjFx
+import com.metrolist.music.playback.audio.DjFxAudioProcessor
+import com.metrolist.music.playback.audio.DjFxEngine
 import com.metrolist.music.playback.queues.EmptyQueue
 import com.metrolist.music.playback.queues.ListQueue
 import com.metrolist.music.playback.queues.Queue
@@ -439,6 +443,9 @@ class MusicService :
     private val historyReporters = HashMap<Player, YouTubeHistoryReporter>()
     private val playerNormalizationProcessors = HashMap<Player, VolumeNormalizationAudioProcessor>()
     private val playerEqualizerProcessors = HashMap<Player, CustomEqualizerAudioProcessor>()
+    private val playerDjFxProcessors = HashMap<Player, DjFxAudioProcessor>()
+    val djFx = DjFxEngine()
+    private var djAutoFxJob: Job? = null
 
     private var loudnessSetupJob: Job? = null
     private var loudnessSetupGeneration: Long = 0L
@@ -1173,6 +1180,12 @@ class MusicService :
                 crossfadeGapless = gapless
             }
 
+        scope.launch {
+            playerFlow.collect { current ->
+                djFx.onPrimaryChanged(current?.let { playerDjFxProcessors[it] })
+            }
+        }
+
         // Observe and cache common preferences to avoid runBlocking reads in playback callbacks
         scope.launch {
             dataStore.data.map { it[PersistentQueueKey] ?: true }.distinctUntilChanged().collect { cachedPersistentQueue = it }
@@ -1303,6 +1316,7 @@ class MusicService :
     private fun createExoPlayer(prefs: Preferences? = null): ExoPlayer {
         val normalizationProcessor = VolumeNormalizationAudioProcessor()
         val eqProcessor = CustomEqualizerAudioProcessor()
+        val djFxProcessor = DjFxAudioProcessor(djFx)
 
         val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
 
@@ -1328,7 +1342,7 @@ class MusicService :
                 .setMediaSourceFactory(
                     createMediaSourceFactory(normalizationProcessor) { createdPlayer },
                 )
-                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, useAudioTrackPlaybackParams))
+                .setRenderersFactory(createRenderersFactory(normalizationProcessor, eqProcessor, silenceProcessor, djFxProcessor, useAudioTrackPlaybackParams))
                 .setLoadControl(
                     // Start playback once ~750ms is buffered (media3's default is 1000ms) so first
                     // audio is audible a touch sooner. min/max/after-rebuffer match the media3 1.x
@@ -1356,6 +1370,7 @@ class MusicService :
         playerNormalizationProcessors[player] = normalizationProcessor
         playerSilenceProcessors[player] = silenceProcessor
         playerEqualizerProcessors[player] = eqProcessor
+        playerDjFxProcessors[player] = djFxProcessor
         equalizerService.addAudioProcessor(eqProcessor)
 
         if (prefs != null) {
@@ -4015,6 +4030,7 @@ class MusicService :
         normalizationProcessor: VolumeNormalizationAudioProcessor,
         eqProcessor: CustomEqualizerAudioProcessor,
         silenceProcessor: SilenceDetectorAudioProcessor,
+        djFxProcessor: DjFxAudioProcessor,
         useAudioTrackPlaybackParams: Boolean,
     ) = object : DefaultRenderersFactory(this) {
         override fun buildAudioRenderers(
@@ -4074,6 +4090,7 @@ class MusicService :
                     arrayOf(
                         normalizationProcessor,
                         eqProcessor,
+                        djFxProcessor,
                         silenceProcessor,
                     ),
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
@@ -4883,6 +4900,8 @@ class MusicService :
         djUsedIds.clear()
         player.currentMediaItem?.mediaId?.let(djUsedIds::add)
         _djModeActive.value = true
+        djFx.enabled = true
+        startAutoFx()
 
         player.repeatMode = REPEAT_MODE_OFF
         player.shuffleModeEnabled = false
@@ -4918,6 +4937,10 @@ class MusicService :
     fun stopDjMode() {
         if (!_djModeActive.value) return
         _djModeActive.value = false
+        djAutoFxJob?.cancel()
+        djAutoFxJob = null
+        djFx.enabled = false
+        djFx.reset()
         djTopUpJob?.cancel()
         djTopUpJob = null
         djUsedIds.clear()
@@ -4926,6 +4949,50 @@ class MusicService :
             player.shuffleModeEnabled = djSavedShuffle
             scheduleCrossfade()
         }
+    }
+
+    /**
+     * Fires an occasional one-shot while a song plays: never in the first 20 s, never
+     * during a crossfade, and at most once per 35-70 s. Near the end of some tracks it
+     * runs a build-up that resolves just before the transition.
+     */
+    private fun startAutoFx() {
+        djAutoFxJob?.cancel()
+        djAutoFxJob =
+            scope.launch {
+                var nextAt = SystemClock.elapsedRealtime() + Random.nextLong(25_000, 45_000)
+                var buildUpForId: String? = null
+                while (isActive) {
+                    delay(1_000)
+                    if (!djFx.autoFx.value || isCrossfading || !player.isPlaying) continue
+                    val position = player.currentPosition
+                    val duration = player.duration
+                    if (duration == C.TIME_UNSET || position < 20_000) continue
+                    val untilTransition = duration - position - activeCrossfadeMs.toLong()
+                    val mediaId = player.currentMediaItem?.mediaId
+
+                    val beatMs = 60_000f / (djFx.bpm.value.takeIf { it > 0f } ?: DjFxEngine.DEFAULT_BPM)
+                    val buildUpMs = (DjFx.BUILD_UP.beats * beatMs).toLong()
+                    if (mediaId != null && mediaId != buildUpForId &&
+                        untilTransition in buildUpMs..(buildUpMs + 1_000)
+                    ) {
+                        buildUpForId = mediaId
+                        if (Random.nextFloat() < 0.5f && djFx.trigger(DjFx.BUILD_UP, auto = true)) {
+                            nextAt = SystemClock.elapsedRealtime() + 30_000
+                        }
+                        continue
+                    }
+
+                    if (SystemClock.elapsedRealtime() < nextAt || untilTransition < 15_000) continue
+                    val fx =
+                        listOf(
+                            DjFx.BASS_DROP, DjFx.BASS_DROP, DjFx.STUTTER, DjFx.STUTTER,
+                            DjFx.QUICK_CUTS, DjFx.DJ_DROP,
+                        ).random()
+                    djFx.trigger(fx, auto = true)
+                    nextAt = SystemClock.elapsedRealtime() + Random.nextLong(35_000, 70_000)
+                }
+            }
     }
 
     private fun topUpDjSet() {
@@ -5028,6 +5095,12 @@ class MusicService :
         player = nextPlayer
         _playerFlow.value = player
         secondaryPlayer = null
+
+        if (_djModeActive.value && djFx.smartTransitions.value) {
+            val transitionMs = activeCrossfadeMs.toLong()
+            playerDjFxProcessors[currentPlayer]?.requestTransitionOut(transitionMs)
+            playerDjFxProcessors[nextPlayer]?.requestTransitionIn(transitionMs)
+        }
 
         // Do not persist the retired player's temporary repeat-off state.
         fadingPlayer?.removeListener(this)
@@ -5145,6 +5218,7 @@ class MusicService :
         playerNormalizationProcessors.remove(player)
         playerSilenceProcessors.remove(player)
         playerEqualizerProcessors.remove(player)?.let(equalizerService::removeAudioProcessor)
+        playerDjFxProcessors.remove(player)
         player.release()
     }
 

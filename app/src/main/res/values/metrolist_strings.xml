@@ -1001,4 +1001,8 @@
     <string name="dj_live_visualizer">Live visualizer</string>
     <string name="dj_enable_live_visualizer">Tap to sync lights to the music</string>
     <string name="dj_unavailable_casting">DJ Mode is not available while casting</string>
+    <string name="dj_fx_unavailable">Effects are not available for this track's audio format.</string>
+    <string name="dj_fx_intensity">Intensity</string>
+    <string name="dj_auto_fx">Auto FX</string>
+    <string name="dj_smart_transitions">Smart transitions</string>
 </resources>

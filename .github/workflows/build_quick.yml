@@ -66,6 +66,9 @@ jobs:
           path: app/ci-debug.keystore
           key: ${{ steps.ci_keystore.outputs.cache-primary-key }}
 
+      - name: Run DJ FX audio tests
+        run: ./gradlew --console=plain :app:testFossDebugUnitTest --tests "com.metrolist.music.playback.audio.*" --warning-mode summary
+
       - name: Build Debug APK
         run: ./gradlew --console=plain assembleFossDebug --warning-mode summary
         env:
@@ -82,3 +85,10 @@ jobs:
         with:
           name: app-foss-debug
           path: app/build/outputs/apk/foss/debug/*.apk
+
+      - name: Upload DJ FX test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dj-fx-test-report
+          path: app/build/reports/tests/
