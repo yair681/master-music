@@ -141,6 +141,21 @@ class DjFxEngine {
         _smartTransitions.value = on
     }
 
+    /**
+     * Called by the service when a DJ crossfade swaps players. Applies the transition
+     * filters and echo only while the Smart Transitions switch is on.
+     */
+    fun startSmartTransition(
+        outgoing: DjFxAudioProcessor?,
+        incoming: DjFxAudioProcessor?,
+        durationMs: Long,
+    ): Boolean {
+        if (!enabled || !_smartTransitions.value) return false
+        outgoing?.requestTransitionOut(durationMs)
+        incoming?.requestTransitionIn(durationMs)
+        return true
+    }
+
     fun toggle(fx: DjFx) {
         require(!fx.oneShot)
         val next = _toggles.value.let { if (fx in it) it - fx else it + fx }

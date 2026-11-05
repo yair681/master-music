@@ -1008,4 +1008,5 @@
     <string name="dj_fx_preset">Preset</string>
     <string name="dj_fx_length_beats">Beats</string>
     <string name="dj_fx_character">Type</string>
+    <string name="dj_smart_transitions_hint">Bass swap, filter and echo-out between songs</string>
 </resources>

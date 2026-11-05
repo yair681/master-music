@@ -5100,10 +5100,12 @@ class MusicService :
         _playerFlow.value = player
         secondaryPlayer = null
 
-        if (_djModeActive.value && djFx.smartTransitions.value) {
-            val transitionMs = activeCrossfadeMs.toLong()
-            playerDjFxProcessors[currentPlayer]?.requestTransitionOut(transitionMs)
-            playerDjFxProcessors[nextPlayer]?.requestTransitionIn(transitionMs)
+        if (_djModeActive.value) {
+            djFx.startSmartTransition(
+                outgoing = playerDjFxProcessors[currentPlayer],
+                incoming = playerDjFxProcessors[nextPlayer],
+                durationMs = activeCrossfadeMs.toLong(),
+            )
         }
 
         // Do not persist the retired player's temporary repeat-off state.

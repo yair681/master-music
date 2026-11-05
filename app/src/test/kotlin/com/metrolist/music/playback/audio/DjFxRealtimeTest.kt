@@ -181,6 +181,30 @@ class DjFxRealtimeTest {
     }
 
     @Test
+    fun `smart transitions switch really controls the transition audio`() {
+        val input = music(seconds = 4f)
+
+        val offEngine = DjFxEngine()
+        val offIncoming = newProcessor(offEngine)
+        offEngine.setSmartTransitions(false)
+        val startedOff = offEngine.startSmartTransition(newProcessor(offEngine), offIncoming, 3_000)
+        offEngine.onPrimaryChanged(offIncoming)
+        val outOff = runWithEvents(offIncoming, input, emptyList())
+
+        val onEngine = DjFxEngine()
+        val onIncoming = newProcessor(onEngine)
+        val startedOn = onEngine.startSmartTransition(newProcessor(onEngine), onIncoming, 3_000)
+        onEngine.onPrimaryChanged(onIncoming)
+        val outOn = runWithEvents(onIncoming, input, emptyList())
+
+        assertTrue("switch off must not start a transition", !startedOff)
+        assertTrue("switch off must leave the audio untouched", outOff.contentEquals(input))
+        assertTrue("switch on must start a transition", startedOn)
+        val bass = tone(outOn, 55.0, SR / 2, SR) / tone(input, 55.0, SR / 2, SR)
+        assertTrue("switch on must hold the incoming bass back: $bass", bass < 0.5)
+    }
+
+    @Test
     fun `presets scale the effect strength`() {
         val ratios =
             DjFxPreset.entries.map { preset ->

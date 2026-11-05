@@ -173,6 +173,21 @@ internal fun DjFxPanel(
             }
         }
 
+        FxSwitchRow(
+            title = "Smart Transitions",
+            subtitle = stringResource(R.string.dj_smart_transitions_hint),
+            checked = smart,
+            enabled = true,
+            onChange = engine::setSmartTransitions,
+        )
+        FxSwitchRow(
+            title = stringResource(R.string.dj_auto_fx),
+            subtitle = null,
+            checked = autoFx,
+            enabled = ready,
+            onChange = engine::setAutoFx,
+        )
+
         if (!ready) {
             Text(
                 text = stringResource(R.string.dj_fx_unavailable),
@@ -294,9 +309,6 @@ internal fun DjFxPanel(
         }
 
         Spacer(Modifier.height(4.dp))
-
-        FxSwitchRow(stringResource(R.string.dj_auto_fx), autoFx, ready, engine::setAutoFx)
-        FxSwitchRow(stringResource(R.string.dj_smart_transitions), smart, true, engine::setSmartTransitions)
     }
 }
 
@@ -359,6 +371,7 @@ private fun FxPad(
 @Composable
 private fun FxSwitchRow(
     title: String,
+    subtitle: String?,
     checked: Boolean,
     enabled: Boolean,
     onChange: (Boolean) -> Unit,
@@ -367,12 +380,21 @@ private fun FxSwitchRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 14.sp,
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    color = Color.White.copy(alpha = 0.55f),
+                    fontSize = 11.sp,
+                )
+            }
+        }
         Switch(
             checked = checked,
             onCheckedChange = onChange,
