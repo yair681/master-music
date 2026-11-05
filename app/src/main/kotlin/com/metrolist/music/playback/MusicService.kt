@@ -201,6 +201,7 @@ import com.metrolist.music.playback.audio.SilenceDetectorAudioProcessor
 import com.metrolist.music.playback.audio.DjFx
 import com.metrolist.music.playback.audio.DjFxAudioProcessor
 import com.metrolist.music.playback.audio.DjFxEngine
+import com.metrolist.music.playback.audio.DjFxProcessorChain
 import com.metrolist.music.playback.queues.EmptyQueue
 import com.metrolist.music.playback.queues.ListQueue
 import com.metrolist.music.playback.queues.Queue
@@ -4086,15 +4087,15 @@ class MusicService :
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(useAudioTrackPlaybackParams)
             .setAudioProcessorChain(
-                DefaultAudioSink.DefaultAudioProcessorChain(
+                DjFxProcessorChain(
                     arrayOf(
                         normalizationProcessor,
                         eqProcessor,
-                        djFxProcessor,
                         silenceProcessor,
                     ),
                     SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
                     SonicAudioProcessor(),
+                    djFxProcessor,
                 ),
             ).build()
     }
@@ -4952,18 +4953,26 @@ class MusicService :
     }
 
     /**
-     * Fires an occasional one-shot while a song plays: never in the first 20 s, never
-     * during a crossfade, and at most once per 35-70 s. Near the end of some tracks it
-     * runs a build-up that resolves just before the transition.
+     * Two background loops while DJ mode is on:
+     *  - tempo analysis for the audible processor, off the audio thread;
+     *  - Auto FX: an occasional effect or combo (never in the first 20 s, never during a
+     *    crossfade, at most once per 30-60 s). On some tracks a build-up is timed to end
+     *    as the crossfade starts, so its drop lands on the incoming track.
      */
     private fun startAutoFx() {
         djAutoFxJob?.cancel()
         djAutoFxJob =
             scope.launch {
-                var nextAt = SystemClock.elapsedRealtime() + Random.nextLong(25_000, 45_000)
+                launch(Dispatchers.Default) {
+                    while (isActive) {
+                        djFx.primary?.runTempoAnalysis()
+                        delay(1_000)
+                    }
+                }
+                var nextAt = SystemClock.elapsedRealtime() + Random.nextLong(20_000, 35_000)
                 var buildUpForId: String? = null
                 while (isActive) {
-                    delay(1_000)
+                    delay(500)
                     if (!djFx.autoFx.value || isCrossfading || !player.isPlaying) continue
                     val position = player.currentPosition
                     val duration = player.duration
@@ -4972,25 +4981,20 @@ class MusicService :
                     val mediaId = player.currentMediaItem?.mediaId
 
                     val beatMs = 60_000f / (djFx.bpm.value.takeIf { it > 0f } ?: DjFxEngine.DEFAULT_BPM)
-                    val buildUpMs = (DjFx.BUILD_UP.beats * beatMs).toLong()
+                    val buildUpMs = (djFx.lengthInBeats(DjFx.BUILD_UP) * beatMs).toLong()
                     if (mediaId != null && mediaId != buildUpForId &&
-                        untilTransition in buildUpMs..(buildUpMs + 1_000)
+                        untilTransition in buildUpMs..(buildUpMs + 600)
                     ) {
                         buildUpForId = mediaId
-                        if (Random.nextFloat() < 0.5f && djFx.trigger(DjFx.BUILD_UP, auto = true)) {
+                        if (Random.nextFloat() < 0.6f && djFx.trigger(DjFx.BUILD_UP, auto = true)) {
                             nextAt = SystemClock.elapsedRealtime() + 30_000
                         }
                         continue
                     }
 
-                    if (SystemClock.elapsedRealtime() < nextAt || untilTransition < 15_000) continue
-                    val fx =
-                        listOf(
-                            DjFx.BASS_DROP, DjFx.BASS_DROP, DjFx.STUTTER, DjFx.STUTTER,
-                            DjFx.QUICK_CUTS, DjFx.DJ_DROP,
-                        ).random()
-                    djFx.trigger(fx, auto = true)
-                    nextAt = SystemClock.elapsedRealtime() + Random.nextLong(35_000, 70_000)
+                    if (SystemClock.elapsedRealtime() < nextAt || untilTransition < buildUpMs + 12_000) continue
+                    djFx.triggerSequence(AUTO_FX_COMBOS.random(), auto = true)
+                    nextAt = SystemClock.elapsedRealtime() + Random.nextLong(30_000, 60_000)
                 }
             }
     }
@@ -5223,6 +5227,17 @@ class MusicService :
     }
 
     companion object {
+        private val AUTO_FX_COMBOS =
+            listOf(
+                listOf(DjFx.BUILD_UP, DjFx.BASS_DROP, DjFx.ECHO_OUT),
+                listOf(DjFx.STUTTER, DjFx.DJ_DROP),
+                listOf(DjFx.QUICK_CUTS, DjFx.BASS_DROP),
+                listOf(DjFx.STUTTER, DjFx.BASS_DROP),
+                listOf(DjFx.DJ_DROP),
+                listOf(DjFx.STUTTER),
+                listOf(DjFx.BASS_DROP),
+                listOf(DjFx.ECHO_OUT),
+            )
         private const val DJ_QUEUE_TITLE = "Master DJ"
         private const val DJ_BATCH_SIZE = 12
         private const val DJ_MIN_AHEAD = 4

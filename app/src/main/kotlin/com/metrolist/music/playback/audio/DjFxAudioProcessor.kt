@@ -13,70 +13,185 @@ import java.nio.ByteBuffer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.floor
+import kotlin.math.ln
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 import kotlin.math.tanh
 
 /**
- * Real-time DJ effects on the decoded PCM stream of one player.
+ * Real-time DJ effects on the decoded PCM of one player.
  *
- * When [DjFxEngine.enabled] is false and no tail is ringing, audio is copied through
- * bit-for-bit, so normal playback is unaffected. It also tracks the tempo of the stream
- * (onset autocorrelation) so beat-based effects follow the actual song.
+ * Real-time rules followed here:
+ *  - nothing on the render path allocates, locks, waits or touches a StateFlow;
+ *  - buffers grow only in [onConfigure], never per buffer;
+ *  - every parameter is smoothed, filters are zero-delay-feedback SVFs that stay
+ *    stable under fast modulation, and entering/leaving processing crossfades with the
+ *    dry signal, so switching effects never clicks;
+ *  - tempo analysis runs on another thread ([runTempoAnalysis]); effects just read its
+ *    latest result and never wait for it.
+ * When no effect is active the input is copied through bit-for-bit.
  */
 @UnstableApi
 class DjFxAudioProcessor(
     private val engine: DjFxEngine,
 ) : BaseAudioProcessor() {
-    private var sampleRate = 0
+    private var sr = 0
     private var channels = 0
 
+    @Volatile
     var isFormatSupported = false
         private set
 
-    // ---- Tempo tracking ----
-    private var frameCounter = 0L
+    private var frame = 0L
+
+    // ------------------------------------------------------------- tempo (audio side)
+    private val onsetRing = FloatArray(ONSET_RING)
+
+    @Volatile
+    private var hopsWritten = 0L
+
+    @Volatile
+    private var tempoEpoch = 0
     private var hopFrames = 441
     private var hopAcc = 0f
     private var hopCount = 0
     private var analysisLp = 0f
     private var analysisAlpha = 0f
     private var prevEnvelope = 0f
-    private val onsets = FloatArray(ONSET_HISTORY)
-    private var onsetWrite = 0
-    private var onsetFilled = 0
-    private var totalHops = 0L
-    private var hopsSinceAnalysis = 0
+
+    // ----------------------------------------------------- tempo (results, any thread)
+    @Volatile
     private var bpm = DjFxEngine.DEFAULT_BPM
+
+    @Volatile
     private var tempoLocked = false
-    private var beatAnchorFrame = 0L
+
+    @Volatile
+    private var beatAnchor = 0L
 
     val lockedBpm: Float
         get() = if (tempoLocked) bpm else 0f
 
-    // ---- One-shot state ----
-    private var shot: DjFx? = null
+    // Analysis scratch (only touched by the analysis thread).
+    private val scratch = FloatArray(ONSET_WINDOW)
+
+    // ---------------------------------------------------------------- buffers
+    private var histL = FloatArray(0)
+    private var histR = FloatArray(0)
+    private var histMask = 0
+    private var echoL = FloatArray(0)
+    private var echoR = FloatArray(0)
+    private var echoMask = 0
+    private var echoWrite = 0
+    private var preL = FloatArray(0)
+    private var preMask = 0
+    private var preWrite = 0
+    private val combL = Array(8) { Comb() }
+    private val combR = Array(8) { Comb() }
+    private val apL = Array(4) { Allpass() }
+    private val apR = Array(4) { Allpass() }
+
+    // ---------------------------------------------------------------- filters
+    private val hpL = Svf()
+    private val hpR = Svf()
+    private val shelfL = Svf()
+    private val shelfR = Svf()
+    private val darkL = Svf()
+    private val darkR = Svf()
+    private val noiseBp = Svf()
+    private val revInHp = Svf()
+    private var echoHpL = 0f
+    private var echoHpR = 0f
+    private var echoLpL = 0f
+    private var echoLpR = 0f
+    private var echoHpCoef = 0f
+    private var echoLpCoef = 0f
+
+    // ------------------------------------------------------------ smoothed params
+    private var procMix = 0f
+    private var processing = false
+    private val hpMix = Ramp(0f)
+    private var hpHz = 30f
+    private var hpQ = 0.707f
+    private val shelfGain = Ramp(1f)
+    private var bassLimit = 1f
+    private var bassEnv = 0f
+    private val darkMix = Ramp(0f)
+    private var darkHz = 18000f
+    private var duck = 1f
+    private val level = Ramp(1f)
+    private val echoSend = Ramp(0f)
+    private var echoFeedback = 0f
+    private val echoMix = Ramp(0f)
+    private var echoDelay = 0f
+    private val echoDry = Ramp(1f)
+    private val revSend = Ramp(0f)
+    private var revFeedback = 0.84f
+    private val revWet = Ramp(0f)
+    private val noiseLevel = Ramp(0f)
+    private var limiterGain = 1f
+    private var gate = 1f
+    private var gateTarget = 1f
+    private var gateStep = 0f
+    private var loopMix = 0f
+    private var echoEnergy = 0f
+    private var revEnergy = 0f
+
+    // Per-block targets.
+    private var tHpMix = 0f
+    private var tHpHz = 30f
+    private var tHpQ = 0.707f
+    private var tShelfDb = 0f
+    private var tShelfHz = 100f
+    private var tDarkMix = 0f
+    private var tDarkHz = 18000f
+    private var tEchoSend = 0f
+    private var tEchoFeedback = 0f
+    private var tEchoMix = 0f
+    private var tEchoDelay = 0f
+    private var tEchoDry = 1f
+    private var tRevSend = 0f
+    private var tRevWet = 0f
+    private var tNoise = 0f
+    private var tGain = 1f
+    private var gain = 1f
+
+    // --------------------------------------------------------------- one-shots
+    private val queue = IntArray(8)
+    private var queueHead = 0
+    private var queueSize = 0
+    private var shot = -1
     private var shotStart = 0L
-    private var shotLength = 0L
-    private var shotBeatFrames = 0f
-    private var pendingShot: DjFx? = null
-    private var pendingStart = 0L
+    private var shotLength = 1L
+    private var shotBeat = 1f
+    private var shotAmount = 0f
+    private var shotOption = 1f
+    private var startAt = -1L
+    private var chained = false
+    private var loopStart = 0L
+    private var brakePos = 0.0
+    private var subPhase = 0.0
+    private var subStart = -1L
+    private var subAmount = 0f
+    private var subDecay = 1f
+    private var duckStart = -1L
+    private var duckDepth = 0f
+    private var duckBeat = 1f
+    private var shelfBurstStart = -1L
+    private var shelfBurstLength = 1L
+    private var shelfBurstDb = 0f
+    private var cutPattern = 0
+    private var rng = 0x2545F491
 
-    // Stutter: captured slice that is replayed while the song keeps running underneath.
-    private var sliceL = FloatArray(0)
-    private var sliceR = FloatArray(0)
-    private var sliceLength = 0
-    private var sliceSegment = -1
-
-    // Sub "boom" oscillator for the bass drop.
-    private var boomPhase = 0.0
-
-    // ---- Transition requests from the service (crossfade) ----
+    // --------------------------------------------------------------- transitions
     @Volatile
-    private var transitionRequest = 0 // 1 = out, 2 = in
+    private var transitionRequest = 0
 
     @Volatile
     private var transitionRequestMs = 0L
@@ -84,501 +199,789 @@ class DjFxAudioProcessor(
     private var transitionStart = 0L
     private var transitionLength = 1L
 
-    // ---- Filters ----
-    private val lowShelf = Biquad()
-    private val highPass = Biquad()
-    private var lowShelfDb = 0f
-    private var highPassHz = 0f
-
-    // ---- Echo ----
-    private var echoL = FloatArray(0)
-    private var echoR = FloatArray(0)
-    private var echoWrite = 0
-    private var echoSend = 0f
-
-    // ---- Reverb (Freeverb style: 4 combs + 2 allpasses per side) ----
-    private val combsL = Array(4) { DelayLine() }
-    private val combsR = Array(4) { DelayLine() }
-    private val allpassL = Array(2) { DelayLine() }
-    private val allpassR = Array(2) { DelayLine() }
-    private val combStoreL = FloatArray(4)
-    private val combStoreR = FloatArray(4)
-    private var reverbSend = 0f
-
-    // ---- Gate (cuts / drops) ----
-    private var gate = 1f
-    private var gateCoef = 0f
-
-    private var wasEnabled = false
-    private var tailFrames = 0L
-
     fun requestTransitionOut(durationMs: Long) {
         transitionRequestMs = durationMs
-        transitionRequest = 1
+        transitionRequest = TRANSITION_OUT
     }
 
     fun requestTransitionIn(durationMs: Long) {
         transitionRequestMs = durationMs
-        transitionRequest = 2
+        transitionRequest = TRANSITION_IN
     }
+
+    // =================================================================== setup
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount !in 1..2) {
             isFormatSupported = false
-            sampleRate = 0
             engine.reportReady(this, false)
             return AudioProcessor.AudioFormat.NOT_SET
         }
-        sampleRate = inputAudioFormat.sampleRate
+        sr = inputAudioFormat.sampleRate
         channels = inputAudioFormat.channelCount
+
+        // Grow-only allocation: configuring again for a new track reuses everything.
+        val histSize = nextPow2(sr * HISTORY_SECONDS)
+        if (histL.size < histSize) {
+            histL = FloatArray(histSize)
+            histR = FloatArray(histSize)
+        }
+        histMask = histL.size - 1
+        val echoSize = nextPow2(sr * ECHO_SECONDS)
+        if (echoL.size < echoSize) {
+            echoL = FloatArray(echoSize)
+            echoR = FloatArray(echoSize)
+        }
+        echoMask = echoL.size - 1
+        val preSize = nextPow2(sr / 20)
+        if (preL.size < preSize) preL = FloatArray(preSize)
+        preMask = preL.size - 1
+        val scale = sr / 44100f
+        for (i in 0 until 8) {
+            combL[i].ensure((COMB_TUNING[i] * scale).toInt())
+            combR[i].ensure(((COMB_TUNING[i] + STEREO_SPREAD) * scale).toInt())
+        }
+        for (i in 0 until 4) {
+            apL[i].ensure((ALLPASS_TUNING[i] * scale).toInt())
+            apR[i].ensure(((ALLPASS_TUNING[i] + STEREO_SPREAD) * scale).toInt())
+        }
+
+        hopFrames = sr / HOPS_PER_SECOND
+        analysisAlpha = 1f - exp(-2f * PI.toFloat() * 150f / sr)
+        gateStep = 1f / (GATE_RAMP_SECONDS * sr)
+        echoHpCoef = 1f - exp(-2f * PI.toFloat() * 180f / sr)
+        echoLpCoef = 1f - exp(-2f * PI.toFloat() * 4800f / sr)
+        revInHp.set(sr, 250f, 0.707f)
+
         isFormatSupported = true
         engine.reportReady(this, true)
-
-        hopFrames = sampleRate / HOPS_PER_SECOND
-        analysisAlpha = 1f - exp(-2f * PI.toFloat() * 150f / sampleRate)
-        gateCoef = 1f - exp(-1f / (0.004f * sampleRate))
-
-        val sliceMax = sampleRate // up to one second
-        sliceL = FloatArray(sliceMax)
-        sliceR = FloatArray(sliceMax)
-        val echoMax = (sampleRate * 2.5f).toInt()
-        echoL = FloatArray(echoMax)
-        echoR = FloatArray(echoMax)
-
-        val scale = sampleRate / 44100f
-        COMB_TUNING.forEachIndexed { i, len ->
-            combsL[i].allocate((len * scale).toInt())
-            combsR[i].allocate(((len + STEREO_SPREAD) * scale).toInt())
-        }
-        ALLPASS_TUNING.forEachIndexed { i, len ->
-            allpassL[i].allocate((len * scale).toInt())
-            allpassR[i].allocate(((len + STEREO_SPREAD) * scale).toInt())
-        }
-        clearState(resetTempo = true)
         return inputAudioFormat
     }
+
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
+        resetState()
+    }
+
+    override fun onReset() {
+        isFormatSupported = false
+        resetState()
+    }
+
+    private fun resetState() {
+        frame = 0
+        tempoEpoch++
+        hopsWritten = 0
+        hopAcc = 0f
+        hopCount = 0
+        analysisLp = 0f
+        prevEnvelope = 0f
+        tempoLocked = false
+        bpm = DjFxEngine.DEFAULT_BPM
+        beatAnchor = 0
+        queueSize = 0
+        shot = -1
+        startAt = -1
+        subStart = -1
+        duckStart = -1
+        shelfBurstStart = -1
+        transition = 0
+        transitionRequest = 0
+        processing = false
+        procMix = 0f
+        hpMix.set(0f)
+        shelfGain.set(1f)
+        darkMix.set(0f)
+        duck = 1f
+        level.set(1f)
+        echoSend.set(0f)
+        echoMix.set(0f)
+        echoDry.set(1f)
+        revSend.set(0f)
+        revWet.set(0f)
+        noiseLevel.set(0f)
+        gate = 1f
+        gateTarget = 1f
+        loopMix = 0f
+        gain = 1f
+        limiterGain = 1f
+        echoEnergy = 0f
+        revEnergy = 0f
+        echoDelay = 0f
+        // Delay lines are cleared only here (seek / new track), never on the render path.
+        echoL.fill(0f)
+        echoR.fill(0f)
+        preL.fill(0f)
+        combL.forEach { it.clear() }
+        combR.forEach { it.clear() }
+        apL.forEach { it.clear() }
+        apR.forEach { it.clear() }
+        hpL.clear()
+        hpR.clear()
+        shelfL.clear()
+        shelfR.clear()
+        darkL.clear()
+        darkR.clear()
+        noiseBp.clear()
+        revInHp.clear()
+        echoHpL = 0f
+        echoHpR = 0f
+        echoLpL = 0f
+        echoLpR = 0f
+    }
+
+    // ================================================================= render
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
         val output = replaceOutputBuffer(remaining)
-
-        val enabled = engine.enabled && isFormatSupported
-        if (!enabled) {
-            if (wasEnabled) {
-                clearState(resetTempo = false)
-                wasEnabled = false
-            }
+        if (!isFormatSupported) {
             output.put(inputBuffer)
             output.flip()
             return
         }
-        wasEnabled = true
+        val enabled = engine.enabled
+        if (enabled && engine.primary === this) pollCommands()
+        if (enabled) consumeTransitionRequest()
 
-        val isPrimary = engine.primary === this
-        if (isPrimary) {
-            while (true) {
-                val fx = engine.pendingShots.poll() ?: break
-                scheduleShot(fx)
-            }
-        }
-        consumeTransitionRequest()
-
-        val intensity = engine.intensity.value
-        val bassBoostOn = engine.isOn(DjFx.BASS_BOOST)
-        val echoOn = engine.isOn(DjFx.ECHO)
-        val reverbOn = engine.isOn(DjFx.REVERB)
-
+        val amounts = engine.amounts
+        val options = engine.options
+        val toggles = if (enabled) engine.toggleMask else 0
         val frames = remaining / (2 * channels)
+
         for (i in 0 until frames) {
             val rawL = inputBuffer.getShort()
             val rawR = if (channels == 2) inputBuffer.getShort() else rawL
-            val inL = rawL / 32768f
-            val inR = rawR / 32768f
+            val dryL = rawL / 32768f
+            val dryR = rawR / 32768f
 
-            analyzeTempo((inL + inR) * 0.5f)
+            val h = frame.toInt() and histMask
+            histL[h] = dryL
+            histR[h] = dryR
+            analyzeOnset((dryL + dryR) * 0.5f)
 
-            if (pendingShot != null && frameCounter >= pendingStart) startShot()
-            if (shot != null && frameCounter >= shotStart + shotLength) endShot()
-            if (transition != 0 && frameCounter >= transitionStart + transitionLength) transition = 0
+            if (frame.toInt() and CONTROL_MASK == 0) {
+                control(enabled, toggles, amounts, options)
+            }
 
-            if (i and CONTROL_MASK == 0) updateControls(intensity, bassBoostOn, echoOn, reverbOn)
-
-            if (!isProcessing()) {
-                // Nothing audible is active: keep the original samples bit-for-bit.
+            if (!processing) {
                 output.putShort(rawL)
                 if (channels == 2) output.putShort(rawR)
-                frameCounter++
+                frame++
                 continue
             }
 
-            var l = inL
-            var r = inR
-
-            // Stutter replaces the live signal with a looped slice.
-            if (shot == DjFx.STUTTER) {
-                val elapsed = (frameCounter - shotStart).toInt()
-                val segment = stutterSegment(elapsed)
-                if (segment != sliceSegment) {
-                    sliceSegment = segment
-                    sliceLength = stutterSliceFrames(segment).coerceIn(32, sliceL.size)
-                }
-                val segStart = stutterSegmentStart(segment)
-                val pos = (elapsed - segStart)
-                val idx = pos % sliceLength
-                if (pos < sliceLength) {
-                    sliceL[idx] = l
-                    sliceR[idx] = r
-                }
-                val fade = sliceFade(idx, sliceLength)
-                l = sliceL[idx] * fade
-                r = sliceR[idx] * fade
-            }
-
-            // Gate for quick cuts / DJ drop / end of build-up.
-            gate += (gateTarget() - gate) * gateCoef
-            l *= gate
-            r *= gate
-
-            if (highPassHz > 0f) {
-                l = highPass.process(l, 0)
-                r = highPass.process(r, 1)
-            }
-            if (lowShelfDb > 0.1f) {
-                l = lowShelf.process(l, 0)
-                r = lowShelf.process(r, 1)
-            }
-
-            if (shot == DjFx.BASS_DROP) {
-                val t = (frameCounter - shotStart) / sampleRate.toFloat()
-                val freq = 38.0 + 32.0 * exp(-t * 3.0)
-                boomPhase += 2.0 * PI * freq / sampleRate
-                if (boomPhase > 2.0 * PI) boomPhase -= 2.0 * PI
-                val boom = (sin(boomPhase) * exp(-t * 1.6) * 0.55 * intensity).toFloat()
-                l += boom
-                r += boom
-            }
-
-            // Echo: dotted eighth note feedback delay.
-            if (echoSend > 0f || tailFrames > 0) {
-                val delay = (shotBeatFramesOrCurrent() * 0.75f).toInt().coerceIn(1, echoL.size - 1)
-                var read = echoWrite - delay
-                if (read < 0) read += echoL.size
-                val wetL = echoL[read]
-                val wetR = echoR[read]
-                echoL[echoWrite] = l * echoSend + wetR * ECHO_FEEDBACK
-                echoR[echoWrite] = r * echoSend + wetL * ECHO_FEEDBACK
-                echoWrite = (echoWrite + 1) % echoL.size
-                l += wetL * ECHO_MIX
-                r += wetR * ECHO_MIX
-            }
-
-            if (reverbSend > 0f || tailFrames > 0) {
-                val input = (l + r) * 0.5f * reverbSend * REVERB_INPUT_GAIN
-                var outL = 0f
-                var outR = 0f
-                for (c in 0 until 4) {
-                    outL += combsL[c].comb(input, combStoreL, c)
-                    outR += combsR[c].comb(input, combStoreR, c)
-                }
-                for (a in 0 until 2) {
-                    outL = allpassL[a].allpass(outL)
-                    outR = allpassR[a].allpass(outR)
-                }
-                l += outL * REVERB_WET
-                r += outR * REVERB_WET
-            }
-
-            if (tailFrames > 0) tailFrames--
-
-            val outL = softClip(l)
-            val outR = softClip(r)
-            output.putShort((outL * 32768f).toInt().coerceIn(-32768, 32767).toShort())
-            if (channels == 2) output.putShort((outR * 32768f).toInt().coerceIn(-32768, 32767).toShort())
-            frameCounter++
+            renderFrame(dryL, dryR, output)
+            frame++
         }
         output.flip()
     }
 
-    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
-        // Seek or new track: old audio must not ring into the new position.
-        clearState(resetTempo = true)
-    }
+    private fun renderFrame(
+        dryL: Float,
+        dryR: Float,
+        output: ByteBuffer,
+    ) {
+        var l = dryL
+        var r = dryR
+        val hpMixV = hpMix.step()
+        val shelfV = shelfGain.step()
+        val darkV = darkMix.step()
+        val levelV = level.step()
+        val echoSendV = echoSend.step()
+        val echoMixV = echoMix.step()
+        val echoDryV = echoDry.step()
+        val revSendV = revSend.step()
+        val revWetV = revWet.step()
+        val noiseV = noiseLevel.step()
 
-    override fun onReset() {
-        sampleRate = 0
-        channels = 0
-        isFormatSupported = false
-        clearState(resetTempo = true)
-    }
-
-    private fun clearState(resetTempo: Boolean) {
-        shot = null
-        pendingShot = null
-        transition = 0
-        sliceSegment = -1
-        gate = 1f
-        lowShelfDb = 0f
-        highPassHz = 0f
-        echoSend = 0f
-        reverbSend = 0f
-        tailFrames = 0
-        lowShelf.reset()
-        highPass.reset()
-        echoL.fill(0f)
-        echoR.fill(0f)
-        echoWrite = 0
-        combsL.forEach { it.clear() }
-        combsR.forEach { it.clear() }
-        allpassL.forEach { it.clear() }
-        allpassR.forEach { it.clear() }
-        combStoreL.fill(0f)
-        combStoreR.fill(0f)
-        if (resetTempo) {
-            onsets.fill(0f)
-            onsetWrite = 0
-            onsetFilled = 0
-            totalHops = 0
-            hopsSinceAnalysis = 0
-            hopAcc = 0f
-            hopCount = 0
-            prevEnvelope = 0f
-            analysisLp = 0f
-            tempoLocked = false
-            bpm = DjFxEngine.DEFAULT_BPM
-            frameCounter = 0
-            beatAnchorFrame = 0
-            engine.reportTempo(this, 0f)
+        // ---- source: stutter loop or vinyl brake read from the history ring
+        val current = shot
+        if (current == FX_STUTTER || loopMix > 0f) {
+            val loopTarget = if (current == FX_STUTTER) 1f else 0f
+            loopMix += (loopTarget - loopMix).coerceIn(-LOOP_SLEW, LOOP_SLEW)
+            if (loopMix > 0f) {
+                val e = (frame - shotStart).toInt().coerceAtLeast(0)
+                val slice = stutterSlice(e)
+                val p = e % slice
+                val window = sliceWindow(p, slice)
+                val idx = (loopStart + p).toInt() and histMask
+                l += (histL[idx] * window * STUTTER_GAIN - l) * loopMix
+                r += (histR[idx] * window * STUTTER_GAIN - r) * loopMix
+            }
         }
+        if (current == FX_DJ_DROP) {
+            val brakeFrames = shotBeat * 0.5f
+            val e = (frame - shotStart).toFloat()
+            if (e < brakeFrames) {
+                val rate = 1.0 - e / brakeFrames
+                val pos = shotStart + brakePos
+                val base = floor(pos).toLong()
+                val frac = (pos - base).toFloat()
+                val a = base.toInt() and histMask
+                val b = (base + 1).toInt() and histMask
+                l = histL[a] + (histL[b] - histL[a]) * frac
+                r = histR[a] + (histR[b] - histR[a]) * frac
+                brakePos += rate
+            }
+        }
+
+        // ---- gate (cuts, drops, build-up roll): slew-limited, no clicks
+        gate += (gateTarget - gate).coerceIn(-gateStep, gateStep)
+        l *= gate
+        r *= gate
+
+        // ---- filters
+        if (darkV > 1e-4f) {
+            l += (darkL.lp(l) - l) * darkV
+            r += (darkR.lp(r) - r) * darkV
+        }
+        if (hpMixV > 1e-4f) {
+            l += (hpL.hp(l) - l) * hpMixV
+            r += (hpR.hp(r) - r) * hpMixV
+        }
+        if (shelfV > 1.0005f) {
+            val lowL = shelfL.lp(l)
+            val lowR = shelfR.lp(r)
+            val peak = max(abs(lowL), abs(lowR))
+            bassEnv = if (peak > bassEnv) peak else bassEnv * BASS_ENV_RELEASE
+            // Keep the boosted low band under the ceiling instead of letting it distort.
+            val allowed = if (bassEnv * shelfV > BASS_CEILING) max(1f, BASS_CEILING / bassEnv) else shelfV
+            bassLimit += (allowed - bassLimit) * 0.01f
+            val g = min(shelfV, bassLimit) - 1f
+            l += lowL * g
+            r += lowR * g
+        } else {
+            bassLimit = shelfV
+        }
+
+        // ---- sidechain duck + synthesized impact
+        l *= levelV
+        r *= levelV
+        if (subStart >= 0) {
+            val t = (frame - subStart) / sr.toDouble()
+            val freq = SUB_END_HZ + (SUB_START_HZ - SUB_END_HZ) * exp(-t / 0.05)
+            subPhase += 2.0 * PI * freq / sr
+            if (subPhase > 2.0 * PI) subPhase -= 2.0 * PI
+            val env = (1.0 - exp(-t / 0.002)) * exp(-t / subDecay)
+            // Saturation adds harmonics so the hit is heard on phone speakers too.
+            val s = (tanh(SUB_DRIVE * sin(subPhase)) / tanh(SUB_DRIVE) * env * subAmount).toFloat()
+            l += s
+            r += s
+            if (env < 1e-4 && t > 0.1) subStart = -1
+        }
+        if (noiseV > 1e-5f) {
+            rng = rng xor (rng shl 13)
+            rng = rng xor (rng ushr 17)
+            rng = rng xor (rng shl 5)
+            val white = rng * 4.656613e-10f
+            val n = noiseBp.bp(white) * noiseV
+            l += n
+            r += n
+        }
+
+        // ---- echo: tempo-synced, filtered ping-pong feedback, gliding delay time
+        if (echoSendV > 1e-5f || echoEnergy > ENERGY_FLOOR) {
+            val readPos = echoWrite - echoDelay
+            val base = floor(readPos).toInt()
+            val frac = readPos - base
+            val a = base and echoMask
+            val b = (base + 1) and echoMask
+            val wetL = echoL[a] + (echoL[b] - echoL[a]) * frac
+            val wetR = echoR[a] + (echoR[b] - echoR[a]) * frac
+            echoLpL += (wetL - echoLpL) * echoLpCoef
+            echoLpR += (wetR - echoLpR) * echoLpCoef
+            echoHpL += (echoLpL - echoHpL) * echoHpCoef
+            echoHpR += (echoLpR - echoHpR) * echoHpCoef
+            val fbL = (echoLpL - echoHpL) * echoFeedback
+            val fbR = (echoLpR - echoHpR) * echoFeedback
+            val w = echoWrite and echoMask
+            echoL[w] = l * echoSendV + fbR
+            echoR[w] = r * echoSendV + fbL
+            echoWrite++
+            echoEnergy = echoEnergy * ENERGY_DECAY + (abs(wetL) + abs(wetR))
+            l = l * echoDryV + wetL * echoMixV
+            r = r * echoDryV + wetR * echoMixV
+        } else {
+            echoWrite++
+            l *= echoDryV
+            r *= echoDryV
+        }
+
+        // ---- reverb: 8 combs + 4 allpasses per side, pre-delay, bass kept out
+        if (revSendV > 1e-5f || revEnergy > ENERGY_FLOOR) {
+            val mono = revInHp.hp((l + r) * 0.5f) * revSendV * REVERB_INPUT
+            preL[preWrite and preMask] = mono
+            val delayed = preL[(preWrite - (sr / 50)) and preMask]
+            preWrite++
+            var outL = 0f
+            var outR = 0f
+            for (c in 0 until 8) {
+                outL += combL[c].process(delayed, revFeedback)
+                outR += combR[c].process(delayed, revFeedback)
+            }
+            for (c in 0 until 4) {
+                outL = apL[c].process(outL)
+                outR = apR[c].process(outR)
+            }
+            revEnergy = revEnergy * ENERGY_DECAY + (abs(outL) + abs(outR))
+            l += outL * revWetV
+            r += outR * revWetV
+        }
+
+        // ---- limiter: instant attack, smooth release, ceiling -1 dBFS
+        val peak = max(abs(l), abs(r))
+        if (peak * limiterGain > LIMIT_CEILING) {
+            limiterGain = LIMIT_CEILING / peak
+        } else {
+            limiterGain += (1f - limiterGain) * LIMIT_RELEASE
+        }
+        l *= limiterGain
+        r *= limiterGain
+
+        // ---- crossfade with the untouched signal when entering/leaving processing
+        procMix += (if (wantsProcessing) PROC_SLEW else -PROC_SLEW)
+        procMix = procMix.coerceIn(0f, 1f)
+        val outL = dryL + (l - dryL) * procMix
+        val outR = dryR + (r - dryR) * procMix
+        if (!wantsProcessing && procMix <= 0f) processing = false
+
+        output.putShort(toPcm(outL))
+        if (channels == 2) output.putShort(toPcm(outR))
     }
 
-    // ---------------------------------------------------------------- shots
+    private var wantsProcessing = false
 
-    private fun isProcessing(): Boolean =
-        shot != null ||
-            transition != 0 ||
-            tailFrames > 0 ||
-            lowShelfDb > 0.1f ||
-            highPassHz > 0f ||
-            echoSend > 0f ||
-            reverbSend > 0f ||
-            gate < 0.999f
+    // ================================================================ control
 
-    private fun beatFrames(): Float = sampleRate * 60f / bpm
+    private fun control(
+        enabled: Boolean,
+        toggles: Int,
+        amounts: FloatArray,
+        options: IntArray,
+    ) {
+        if (enabled) {
+            if (engine.primary === this && engine.dropRequest.getAndSet(0) == 1) {
+                if (shot >= 0) shot = -1
+                pushFront(FX_BASS_DROP)
+                startAt = frame
+                chained = true
+            }
+            if (shot >= 0 && frame >= shotStart + shotLength) finishShot()
+            if (shot < 0 && queueSize > 0) {
+                if (startAt < 0) startAt = if (chained) frame else nextBeat(frame, queue[queueHead])
+                if (frame >= startAt) startShot(amounts, options)
+            }
+            if (transition != 0 && frame >= transitionStart + transitionLength) transition = 0
+        } else if (shot >= 0 || queueSize > 0) {
+            shot = -1
+            queueSize = 0
+            startAt = -1
+        }
 
-    private fun shotBeatFramesOrCurrent(): Float = if (shot != null) shotBeatFrames else beatFrames()
-
-    private fun scheduleShot(fx: DjFx) {
-        if (shot != null || pendingShot != null) return
+        // ---- targets
+        tHpMix = 0f
+        tHpHz = 30f
+        tHpQ = 0.707f
+        tShelfDb = 0f
+        tShelfHz = 100f
+        tDarkMix = 0f
+        tDarkHz = 18000f
+        tEchoSend = 0f
+        tEchoFeedback = 0.5f
+        tEchoMix = 0f
+        tEchoDry = 1f
+        tRevSend = 0f
+        tRevWet = 0f
+        tNoise = 0f
+        tGain = 1f
+        gateTarget = 1f
         val beat = beatFrames()
-        val start =
-            if (tempoLocked && frameCounter > beatAnchorFrame) {
-                val beatsSince = (frameCounter - beatAnchorFrame) / beat
-                beatAnchorFrame + (ceil(beatsSince) * beat).toLong()
+        tEchoDelay = beat * DjFx.ECHO.options[options[DjFx.ECHO.ordinal]]
+
+        if (toggles and (1 shl DjFx.BASS_BOOST.ordinal) != 0) {
+            val a = amounts[DjFx.BASS_BOOST.ordinal]
+            tShelfDb = 4f + 8f * a
+            tShelfHz = DjFx.BASS_BOOST.options[options[DjFx.BASS_BOOST.ordinal]]
+        }
+        if (toggles and (1 shl DjFx.ECHO.ordinal) != 0) {
+            val a = amounts[DjFx.ECHO.ordinal]
+            tEchoSend = 0.7f + 0.3f * a
+            tEchoFeedback = 0.4f + 0.3f * a
+            tEchoMix = 0.55f + 0.35f * a
+        }
+        if (toggles and (1 shl DjFx.REVERB.ordinal) != 0) {
+            val a = amounts[DjFx.REVERB.ordinal]
+            tRevSend = 1f
+            tRevWet = 0.9f + 1.8f * a
+            revFeedback = DjFx.REVERB.options[options[DjFx.REVERB.ordinal]]
+        } else {
+            revFeedback = DjFx.REVERB.options[1]
+        }
+
+        if (shot >= 0) shotTargets(beat)
+        if (transition != 0) transitionTargets()
+
+        if (shelfBurstStart >= 0) {
+            val p = (frame - shelfBurstStart).toFloat() / shelfBurstLength
+            if (p >= 1f) {
+                shelfBurstStart = -1
             } else {
-                frameCounter
+                tShelfDb = max(tShelfDb, shelfBurstDb * (1f - p))
+                tShelfHz = max(tShelfHz, 100f)
             }
-        pendingShot = fx
-        pendingStart = start
-    }
-
-    private fun startShot() {
-        val fx = pendingShot ?: return
-        pendingShot = null
-        shot = fx
-        shotStart = frameCounter
-        shotBeatFrames = beatFrames()
-        shotLength = (fx.beats * shotBeatFrames).toLong()
-        sliceSegment = -1
-        boomPhase = 0.0
-    }
-
-    private fun endShot() {
-        val finished = shot
-        shot = null
-        tailFrames = (sampleRate * 3L)
-        if (finished == DjFx.BUILD_UP) {
-            // A build-up resolves into a drop on the next beat.
-            pendingShot = DjFx.BASS_DROP
-            pendingStart = frameCounter
         }
-    }
-
-    private fun shotProgress(): Float = ((frameCounter - shotStart).toFloat() / shotLength).coerceIn(0f, 1f)
-
-    /** Stutter roll: two beats of 1/8 notes, one beat of 1/16, one beat of 1/32. */
-    private fun stutterSegment(elapsed: Int): Int {
-        val beat = shotBeatFrames
-        return when {
-            elapsed < beat * 2 -> (elapsed / (beat / 2)).toInt()
-            elapsed < beat * 3 -> 4 + ((elapsed - beat * 2) / (beat / 4)).toInt()
-            else -> 8 + ((elapsed - beat * 3) / (beat / 8)).toInt()
-        }
-    }
-
-    private fun stutterSegmentStart(segment: Int): Int {
-        val beat = shotBeatFrames
-        return when {
-            segment < 4 -> (segment * beat / 2).toInt()
-            segment < 8 -> (beat * 2 + (segment - 4) * beat / 4).toInt()
-            else -> (beat * 3 + (segment - 8) * beat / 8).toInt()
-        }
-    }
-
-    private fun stutterSliceFrames(segment: Int): Int {
-        val beat = shotBeatFrames
-        return when {
-            segment < 4 -> (beat / 4).toInt() // repeats a 1/16 slice inside each 1/8
-            segment < 8 -> (beat / 8).toInt()
-            else -> (beat / 16).toInt()
-        }
-    }
-
-    private fun sliceFade(
-        idx: Int,
-        length: Int,
-    ): Float {
-        val ramp = (sampleRate * 0.003f).toInt().coerceAtLeast(1)
-        return when {
-            idx < ramp -> idx / ramp.toFloat()
-            idx > length - ramp -> (length - idx) / ramp.toFloat()
-            else -> 1f
-        }
-    }
-
-    private fun gateTarget(): Float {
-        val current = shot ?: return 1f
-        val elapsed = frameCounter - shotStart
-        val beat = shotBeatFrames
-        return when (current) {
-            DjFx.DJ_DROP -> if (elapsed < beat) 0f else 1f
-            DjFx.QUICK_CUTS -> {
-                val step = ((elapsed / (beat / 4)).toInt()) % CUT_PATTERN.size
-                if (CUT_PATTERN[step]) 1f else 0f
-            }
-            DjFx.BUILD_UP -> {
-                // Last two beats: accelerating 1/16 gate for tension.
-                if (elapsed > beat * 6) {
-                    val step = (elapsed / (beat / 4)).toInt()
-                    if (step % 2 == 0) 1f else 0.15f
-                } else {
+        duck =
+            if (duckStart >= 0) {
+                val e = (frame - duckStart) / duckBeat
+                if (e > 2f) {
+                    duckStart = -1
                     1f
+                } else {
+                    1f - duckDepth * exp(-e * 3f)
+                }
+            } else {
+                1f
+            }
+
+        // ---- smoothing (one pole per control block)
+        hpMix.toward(tHpMix, SMOOTH)
+        hpHz += (tHpHz - hpHz) * SMOOTH_FAST
+        hpQ += (tHpQ - hpQ) * SMOOTH
+        if (hpMix.active(1e-4f)) {
+            hpL.set(sr, hpHz, hpQ)
+            hpR.copyFrom(hpL)
+        } else {
+            hpL.clear()
+            hpR.clear()
+        }
+        val targetGain = dbToGain(tShelfDb)
+        shelfGain.toward(targetGain, SMOOTH)
+        if (shelfGain.end > 1.0005f || shelfGain.cur > 1.0005f) {
+            shelfL.set(sr, tShelfHz, 0.707f)
+            shelfR.copyFrom(shelfL)
+        } else {
+            shelfL.clear()
+            shelfR.clear()
+        }
+        darkMix.toward(tDarkMix, SMOOTH_FAST)
+        darkHz += (tDarkHz - darkHz) * SMOOTH_FAST
+        if (darkMix.active(1e-4f)) {
+            darkL.set(sr, darkHz, 0.9f)
+            darkR.copyFrom(darkL)
+        }
+        echoSend.toward(tEchoSend, SMOOTH)
+        echoFeedback += (tEchoFeedback - echoFeedback) * SMOOTH
+        echoMix.toward(tEchoMix, SMOOTH)
+        echoDry.toward(tEchoDry, SMOOTH_FAST)
+        echoDelay = if (echoDelay <= 0f) tEchoDelay else echoDelay + (tEchoDelay - echoDelay) * DELAY_GLIDE
+        echoDelay = echoDelay.coerceIn(1f, (echoMask - 2).toFloat())
+        revSend.toward(tRevSend, SMOOTH)
+        revWet.toward(tRevWet, SMOOTH)
+        noiseLevel.toward(tNoise, SMOOTH)
+        gain += (tGain - gain) * SMOOTH
+        level.toward(gain * duck, 1f)
+
+        val neutral =
+            shot < 0 && queueSize == 0 && transition == 0 && subStart < 0 && duckStart < 0 &&
+                shelfBurstStart < 0 && toggles == 0 &&
+                gate >= 0.9999f && gateTarget >= 1f && loopMix <= 0f &&
+                !hpMix.active(1e-4f) && !shelfGain.active(0.0005f, above = 1f) && !darkMix.active(1e-4f) &&
+                !echoSend.active(1e-5f) && echoEnergy < ENERGY_FLOOR && !revSend.active(1e-5f) && revEnergy < ENERGY_FLOOR &&
+                !noiseLevel.active(1e-5f) && !level.active(1e-4f, above = 1f) && !echoDry.active(1e-4f, above = 1f)
+        wantsProcessing = !neutral
+        if (wantsProcessing && !processing) {
+            processing = true
+            limiterGain = 1f
+        }
+    }
+
+    private fun shotTargets(beat: Float) {
+        val e = (frame - shotStart).toFloat()
+        val p = (e / shotLength).coerceIn(0f, 1f)
+        val a = shotAmount
+        when (shot) {
+            FX_STUTTER -> {
+                // Second half of the roll: rising filter for tension.
+                if (p > 0.5f) {
+                    val q = (p - 0.5f) * 2f
+                    tHpMix = 1f
+                    tHpHz = 30f * ((200f + 1400f * a) / 30f).pow(q)
+                    tHpQ = 0.8f + 1.2f * a * q
                 }
             }
-            else -> 1f
+            FX_QUICK_CUTS -> {
+                val step = (e / (shotBeat / 4f)).toInt() and 15
+                val open = CUT_PATTERNS[cutPattern][step]
+                val depth = (0.5f + a * 0.75f).coerceAtMost(1f)
+                gateTarget = if (open) 1f else 1f - depth
+            }
+            FX_DJ_DROP -> {
+                val brake = shotBeat * 0.5f
+                val silence = shotBeat * shotOption
+                when {
+                    e < brake -> {
+                        val q = e / brake
+                        tDarkMix = 1f
+                        tDarkHz = 16000f * (500f / 16000f).pow(q)
+                        tGain = 1f - 0.25f * q * q
+                    }
+                    e < brake + silence -> gateTarget = 0f
+                    else -> Unit
+                }
+                if (e >= brake + silence && subStart < 0 && shelfBurstStart < 0) impact(0.7f + 0.3f * a, 2f)
+            }
+            FX_BASS_DROP -> Unit // the impact is fired once in startShot
+            FX_BUILD_UP -> {
+                val beats = shotLength / shotBeat
+                val beatPos = e / shotBeat
+                tHpMix = 1f
+                tHpHz = 30f * ((600f + 2400f * a) / 30f).pow(p)
+                tHpQ = 0.707f + 2.3f * a * p
+                noiseBp.set(sr, 400f * 20f.pow(p), 1.4f)
+                tNoise = (0.02f + 0.16f * a) * p * p
+                tRevSend = max(tRevSend, p * a)
+                tRevWet = max(tRevWet, 1.5f * p * a)
+                tGain = 1f + 0.25f * a * p
+                gateTarget =
+                    when {
+                        beatPos > beats - 0.125f -> 0f // pre-drop gap
+                        beatPos > beats - 1f -> rollGate(e, shotBeat / 8f, 0.85f * a)
+                        beatPos > beats - 2f -> rollGate(e, shotBeat / 4f, 0.7f * a)
+                        beatPos > beats - 3f -> rollGate(e, shotBeat / 2f, 0.5f * a)
+                        else -> 1f
+                    }
+            }
+            FX_ECHO_OUT -> {
+                tEchoSend = if (e < shotBeat) 1f else 0f
+                tEchoFeedback = 0.55f + 0.2f * a
+                tEchoMix = 0.8f + 0.2f * a
+                tEchoDelay = beat * 0.75f
+                tEchoDry = if (e < shotBeat || p > 0.94f) 1f else 0f
+                tRevSend = max(tRevSend, 0.5f * a)
+                tRevWet = max(tRevWet, 1.2f * a)
+            }
         }
     }
 
-    // ------------------------------------------------------------ controls
+    private fun transitionTargets() {
+        val p = ((frame - transitionStart).toFloat() / transitionLength).coerceIn(0f, 1f)
+        if (transition == TRANSITION_OUT) {
+            tHpMix = 1f
+            tHpHz = max(tHpHz, 30f * (1200f / 30f).pow(p))
+            if (p > 0.25f) {
+                tEchoSend = max(tEchoSend, 1f)
+                tEchoFeedback = max(tEchoFeedback, 0.62f)
+                tEchoMix = max(tEchoMix, 0.9f)
+                tEchoDelay = beatFrames() * 0.75f
+            }
+            tRevSend = max(tRevSend, 0.6f * p)
+            tRevWet = max(tRevWet, 1.5f * p)
+        } else {
+            // Bass swap: the incoming bass waits, then comes in over half a beat.
+            if (p < 0.6f) {
+                tHpMix = 1f
+                tHpHz = max(tHpHz, 220f)
+            }
+        }
+    }
+
+    private fun rollGate(
+        e: Float,
+        step: Float,
+        depth: Float,
+    ): Float = if (((e / step).toInt() and 1) == 0) 1f else 1f - depth
+
+    // ================================================================= shots
+
+    private fun pollCommands() {
+        while (true) {
+            val code = engine.pendingShots.poll() ?: break
+            val fx = code and 0xFF
+            if (code and DjFxEngine.APPEND != 0) {
+                pushBack(fx)
+            } else {
+                // A pad press interrupts: drop what is queued and what is running.
+                queueSize = 0
+                shot = -1
+                startAt = -1
+                chained = false
+                pushBack(fx)
+            }
+        }
+    }
+
+    private fun pushBack(fx: Int) {
+        if (queueSize == queue.size) return
+        queue[(queueHead + queueSize) % queue.size] = fx
+        queueSize++
+    }
+
+    private fun pushFront(fx: Int) {
+        if (queueSize == queue.size) queueSize--
+        queueHead = (queueHead - 1 + queue.size) % queue.size
+        queue[queueHead] = fx
+        queueSize++
+    }
+
+    private fun startShot(
+        amounts: FloatArray,
+        options: IntArray,
+    ) {
+        val fx = queue[queueHead]
+        queueHead = (queueHead + 1) % queue.size
+        queueSize--
+        startAt = -1
+        chained = false
+
+        val entry = DjFx.entries[fx]
+        shot = fx
+        shotStart = frame
+        shotBeat = beatFrames()
+        shotAmount = amounts[if (fx == FX_ECHO_OUT) DjFx.ECHO.ordinal else fx]
+        shotOption = entry.options[options[fx]]
+        val beats =
+            when (fx) {
+                FX_DJ_DROP -> 0.5f + shotOption + 2f
+                else -> shotOption
+            }
+        shotLength = (beats * shotBeat).toLong().coerceAtLeast(1)
+
+        when (fx) {
+            FX_STUTTER -> {
+                // Loop the most recent beat that is fully in the history.
+                val slice = (shotBeat / 4f).toLong()
+                var start = lastBeat(frame)
+                if (frame - start < slice) start -= shotBeat.toLong()
+                if (start < 0 || frame - start > histMask) start = frame - slice
+                loopStart = start
+            }
+            FX_DJ_DROP -> brakePos = 0.0
+            FX_BASS_DROP -> impact(0.75f + 0.25f * shotAmount, shotOption)
+            FX_QUICK_CUTS -> {
+                rng = rng * 1103515245 + 12345
+                cutPattern = (rng ushr 16) % CUT_PATTERNS.size
+            }
+        }
+    }
+
+    private fun finishShot() {
+        val finished = shot
+        shot = -1
+        chained = queueSize > 0
+        val dropAlreadyQueued = queueSize > 0 && queue[queueHead] == FX_BASS_DROP
+        // The drop goes to whichever player is audible by now (it may be the next track).
+        if (finished == FX_BUILD_UP && !dropAlreadyQueued) engine.dropRequest.set(1)
+    }
+
+    /** Synthesized 808-style hit, a bass boost burst and a short sidechain duck. */
+    private fun impact(
+        strength: Float,
+        beats: Float,
+    ) {
+        subStart = frame
+        subPhase = 0.0
+        subAmount = SUB_LEVEL * strength
+        subDecay = (0.35 * beats * shotBeat / sr).coerceIn(0.25, 2.5).toFloat()
+        shelfBurstStart = frame
+        shelfBurstLength = (beats * shotBeat).toLong().coerceAtLeast(1)
+        shelfBurstDb = 6f + 6f * strength
+        duckStart = frame
+        duckDepth = 0.55f * strength
+        duckBeat = shotBeat
+    }
+
+    private fun stutterSlice(e: Int): Int {
+        val half = shotLength / 2
+        val threeQuarter = shotLength * 3 / 4
+        val div =
+            when {
+                e < half -> 4f
+                e < threeQuarter -> 8f
+                else -> 16f
+            }
+        return (shotBeat / div).toInt().coerceAtLeast(64)
+    }
+
+    private fun sliceWindow(
+        p: Int,
+        slice: Int,
+    ): Float {
+        val ramp = min((sr * 0.0015f).toInt(), slice / 4).coerceAtLeast(1)
+        return when {
+            p < ramp -> 0.5f - 0.5f * kotlin.math.cos(PI.toFloat() * p / ramp)
+            p >= slice - ramp -> 0.5f - 0.5f * kotlin.math.cos(PI.toFloat() * (slice - p) / ramp)
+            else -> 1f
+        }
+    }
 
     private fun consumeTransitionRequest() {
         val request = transitionRequest
         if (request == 0) return
         transitionRequest = 0
         transition = request
-        transitionStart = frameCounter
-        transitionLength = (transitionRequestMs * sampleRate / 1000L).coerceAtLeast(1L)
+        transitionStart = frame
+        transitionLength = (transitionRequestMs * sr / 1000L).coerceAtLeast(1L)
     }
 
-    private fun updateControls(
-        intensity: Float,
-        bassBoostOn: Boolean,
-        echoOn: Boolean,
-        reverbOn: Boolean,
-    ) {
-        var shelf = if (bassBoostOn) 4f + 6f * intensity else 0f
-        var hp = 0f
-        var echo = if (echoOn) 0.25f + 0.45f * intensity else 0f
-        val reverb = if (reverbOn) 0.35f + 0.65f * intensity else 0f
+    // ================================================================= tempo
 
-        when (shot) {
-            DjFx.BASS_DROP -> shelf = maxOf(shelf, (6f + 8f * intensity) * (1f - shotProgress()))
-            DjFx.DJ_DROP -> {
-                val elapsed = frameCounter - shotStart
-                if (elapsed >= shotBeatFrames) shelf = maxOf(shelf, (4f + 6f * intensity) * (1f - shotProgress()))
-            }
-            DjFx.BUILD_UP -> {
-                val p = shotProgress()
-                hp = 30f * (1500f / 30f).pow(p * (0.5f + 0.5f * intensity))
-            }
-            else -> Unit
-        }
+    private fun beatFrames(): Float = sr * 60f / (if (tempoLocked) bpm else DjFxEngine.DEFAULT_BPM)
 
-        if (transition != 0) {
-            val p = ((frameCounter - transitionStart).toFloat() / transitionLength).coerceIn(0f, 1f)
-            if (transition == 1) {
-                // Outgoing track: bass rolls off and it trails away on echoes.
-                hp = maxOf(hp, 30f * (900f / 30f).pow(p))
-                if (p > 0.4f) echo = maxOf(echo, 0.6f * intensity)
-            } else {
-                // Incoming track: its bass stays out until the outgoing bass is gone.
-                val cut = 1f - (p / 0.7f).coerceIn(0f, 1f)
-                if (cut > 0f) hp = maxOf(hp, 30f + 220f * cut)
-            }
-        }
-
-        if (abs(shelf - lowShelfDb) > 0.05f) {
-            if (lowShelfDb <= 0.1f && shelf > 0.1f) lowShelf.reset()
-            lowShelfDb = shelf
-            if (shelf > 0.1f) lowShelf.setLowShelf(sampleRate, 110f, shelf)
-        }
-        if (abs(hp - highPassHz) > 0.5f || (hp == 0f && highPassHz != 0f)) {
-            if (hp > 0f) {
-                if (highPassHz == 0f) highPass.reset()
-                highPass.setHighPass(sampleRate, hp.coerceAtMost(sampleRate * 0.45f), 0.8f)
-            }
-            highPassHz = hp
-        }
-        echoSend = echo
-        reverbSend = reverb
-        if (echo > 0f || reverb > 0f) tailFrames = maxOf(tailFrames, sampleRate * 3L)
+    private fun lastBeat(now: Long): Long {
+        if (!tempoLocked) return now
+        val b = beatFrames()
+        val n = floor((now - beatAnchor) / b.toDouble())
+        return beatAnchor + (n * b).toLong()
     }
 
-    // --------------------------------------------------------------- tempo
+    private fun nextBeat(
+        now: Long,
+        fx: Int,
+    ): Long {
+        if (!tempoLocked || fx == FX_STUTTER) return now
+        val b = beatFrames()
+        val n = ceil((now - beatAnchor) / b.toDouble())
+        return beatAnchor + (n * b).toLong()
+    }
 
-    private fun analyzeTempo(mono: Float) {
+    private fun analyzeOnset(mono: Float) {
         analysisLp += (mono - analysisLp) * analysisAlpha
         hopAcc += analysisLp * analysisLp
-        hopCount++
-        if (hopCount < hopFrames) return
-
+        if (++hopCount < hopFrames) return
         val envelope = sqrt(hopAcc / hopCount)
         hopAcc = 0f
         hopCount = 0
-        val onset = (envelope - prevEnvelope).coerceAtLeast(0f)
+        val written = hopsWritten
+        onsetRing[(written and RING_MASK.toLong()).toInt()] = (envelope - prevEnvelope).coerceAtLeast(0f)
         prevEnvelope = envelope
-        onsets[onsetWrite] = onset
-        onsetWrite = (onsetWrite + 1) % ONSET_HISTORY
-        if (onsetFilled < ONSET_HISTORY) onsetFilled++
-        totalHops++
-
-        if (++hopsSinceAnalysis >= ANALYSIS_INTERVAL_HOPS && onsetFilled >= MIN_ANALYSIS_HOPS) {
-            hopsSinceAnalysis = 0
-            estimateTempo()
-        }
+        hopsWritten = written + 1
     }
 
-    private fun onsetAt(hopsAgo: Int): Float {
-        var idx = onsetWrite - 1 - hopsAgo
-        while (idx < 0) idx += ONSET_HISTORY
-        return onsets[idx]
-    }
+    /**
+     * Estimates tempo and beat phase from the onset history. Runs on a background thread;
+     * the render path only reads the volatile results.
+     */
+    fun runTempoAnalysis() {
+        if (!isFormatSupported) return
+        val epoch = tempoEpoch
+        val written = hopsWritten
+        val n = min(written, ONSET_WINDOW.toLong()).toInt()
+        if (n < MIN_ANALYSIS_HOPS) return
+        for (i in 0 until n) scratch[i] = onsetRing[((written - n + i) and RING_MASK.toLong()).toInt()]
 
-    private fun estimateTempo() {
-        val n = onsetFilled
         var energy = 0f
-        for (i in 0 until n) energy += onsetAt(i) * onsetAt(i)
+        for (i in 0 until n) energy += scratch[i] * scratch[i]
         if (energy <= 1e-9f) return
 
         var bestLag = 0
         var bestScore = 0f
         for (lag in MIN_LAG..MAX_LAG) {
             var score = 0f
-            for (i in 0 until n - lag) score += onsetAt(i) * onsetAt(i + lag)
-            // Mild preference for tempos near 120 BPM to avoid half/double errors.
-            val bpmAtLag = 60f * HOPS_PER_SECOND / lag
-            val weight = exp(-0.5f * ((ln2(bpmAtLag / 120f)) / 0.6f).let { it * it })
-            score *= weight
+            for (i in lag until n) score += scratch[i] * scratch[i - lag]
+            val lagBpm = 60f * HOPS_PER_SECOND / lag
+            val octave = ln(lagBpm / 120f) / LN2 / 0.6f
+            score *= exp(-0.5f * octave * octave)
             if (score > bestScore) {
                 bestScore = score
                 bestLag = lag
@@ -586,131 +989,168 @@ class DjFxAudioProcessor(
         }
         if (bestLag == 0 || bestScore / energy < MIN_CONFIDENCE) return
 
-        val newBpm = 60f * HOPS_PER_SECOND / bestLag
-        bpm = if (tempoLocked && abs(newBpm - bpm) < 4f) bpm * 0.7f + newBpm * 0.3f else newBpm
-        tempoLocked = true
-
-        // Beat phase: the offset within one period that collects the most onset energy.
         var bestOffset = 0
         var bestPhase = -1f
         for (offset in 0 until bestLag) {
             var sum = 0f
-            var k = offset
-            while (k < n) {
-                sum += onsetAt(k)
-                k += bestLag
+            var k = n - 1 - offset
+            while (k >= 0) {
+                sum += scratch[k]
+                k -= bestLag
             }
             if (sum > bestPhase) {
                 bestPhase = sum
                 bestOffset = offset
             }
         }
-        val latestHopFrame = frameCounter - (frameCounter % hopFrames)
-        beatAnchorFrame = latestHopFrame - bestOffset.toLong() * hopFrames
-        engine.reportTempo(this, bpm)
+        if (epoch != tempoEpoch) return
+
+        val newBpm = 60f * HOPS_PER_SECOND / bestLag
+        val smoothed = if (tempoLocked && abs(newBpm - bpm) < 4f) bpm * 0.7f + newBpm * 0.3f else newBpm
+        beatAnchor = (written - 1 - bestOffset) * hopFrames
+        bpm = smoothed
+        tempoLocked = true
+        engine.publishTempo(this, smoothed)
     }
 
-    private fun ln2(x: Float): Float = (kotlin.math.ln(x.toDouble()) / kotlin.math.ln(2.0)).toFloat()
+    // ================================================================= DSP
 
-    private fun softClip(x: Float): Float {
-        val a = abs(x)
-        if (a <= SOFT_KNEE) return x
-        val shaped = SOFT_KNEE + (1f - SOFT_KNEE) * tanh((a - SOFT_KNEE) / (1f - SOFT_KNEE))
-        return if (x < 0) -shaped else shaped
+    /** A control-rate value interpolated linearly per sample across each control block. */
+    private class Ramp(initial: Float) {
+        var cur = initial
+        var end = initial
+        private var inc = 0f
+
+        fun set(v: Float) {
+            cur = v
+            end = v
+            inc = 0f
+        }
+
+        fun toward(
+            target: Float,
+            coef: Float,
+        ) {
+            cur = end
+            end += (target - end) * coef
+            inc = (end - cur) / (CONTROL_MASK + 1)
+        }
+
+        fun step(): Float {
+            cur += inc
+            return cur
+        }
+
+        /** True while the value (or where it is heading) is away from [above] by more than [eps]. */
+        fun active(
+            eps: Float,
+            above: Float = 0f,
+        ): Boolean = abs(cur - above) > eps || abs(end - above) > eps
     }
 
-    // --------------------------------------------------------------- DSP
-
-    /** RBJ biquad with independent state for two channels. */
-    private class Biquad {
-        private var b0 = 1f
-        private var b1 = 0f
-        private var b2 = 0f
+    /** Zero-delay-feedback state variable filter (Zavalishin / Simper). */
+    private class Svf {
         private var a1 = 0f
         private var a2 = 0f
-        private val x1 = FloatArray(2)
-        private val x2 = FloatArray(2)
-        private val y1 = FloatArray(2)
-        private val y2 = FloatArray(2)
+        private var a3 = 0f
+        private var k = 1.414f
+        private var ic1 = 0f
+        private var ic2 = 0f
+        private var lastHp = 0f
+        private var lastBp = 0f
 
-        fun reset() {
-            x1.fill(0f)
-            x2.fill(0f)
-            y1.fill(0f)
-            y2.fill(0f)
-        }
-
-        fun setLowShelf(
+        fun set(
             sampleRate: Int,
-            freq: Float,
-            gainDb: Float,
-        ) {
-            val a = 10.0.pow(gainDb / 40.0)
-            val w = 2.0 * PI * freq / sampleRate
-            val cw = cos(w)
-            val alpha = sin(w) / 2.0 * sqrt(2.0)
-            val sa = 2.0 * sqrt(a) * alpha
-            val n0 = (a + 1) + (a - 1) * cw + sa
-            set(
-                a * ((a + 1) - (a - 1) * cw + sa) / n0,
-                2 * a * ((a - 1) - (a + 1) * cw) / n0,
-                a * ((a + 1) - (a - 1) * cw - sa) / n0,
-                -2 * ((a - 1) + (a + 1) * cw) / n0,
-                ((a + 1) + (a - 1) * cw - sa) / n0,
-            )
-        }
-
-        fun setHighPass(
-            sampleRate: Int,
-            freq: Float,
+            hz: Float,
             q: Float,
         ) {
-            val w = 2.0 * PI * freq / sampleRate
-            val cw = cos(w)
-            val alpha = sin(w) / (2.0 * q)
-            val n0 = 1 + alpha
-            set(
-                (1 + cw) / 2 / n0,
-                -(1 + cw) / n0,
-                (1 + cw) / 2 / n0,
-                -2 * cw / n0,
-                (1 - alpha) / n0,
-            )
+            val f = hz.coerceIn(10f, sampleRate * 0.45f)
+            val g = tan(PI * f / sampleRate).toFloat()
+            k = 1f / q.coerceAtLeast(0.1f)
+            a1 = 1f / (1f + g * (g + k))
+            a2 = g * a1
+            a3 = g * a2
         }
 
-        private fun set(
-            nb0: Double,
-            nb1: Double,
-            nb2: Double,
-            na1: Double,
-            na2: Double,
-        ) {
-            b0 = nb0.toFloat()
-            b1 = nb1.toFloat()
-            b2 = nb2.toFloat()
-            a1 = na1.toFloat()
-            a2 = na2.toFloat()
+        fun copyFrom(other: Svf) {
+            a1 = other.a1
+            a2 = other.a2
+            a3 = other.a3
+            k = other.k
+        }
+
+        fun clear() {
+            ic1 = 0f
+            ic2 = 0f
+        }
+
+        private fun tick(v0: Float): Float {
+            val v3 = v0 - ic2
+            val v1 = a1 * ic1 + a2 * v3
+            val v2 = ic2 + a2 * ic1 + a3 * v3
+            ic1 = 2f * v1 - ic1
+            ic2 = 2f * v2 - ic2
+            if (abs(ic1) < 1e-25f) ic1 = 0f
+            if (abs(ic2) < 1e-25f) ic2 = 0f
+            lastBp = v1
+            lastHp = v0 - k * v1 - v2
+            return v2
+        }
+
+        fun lp(x: Float): Float = tick(x)
+
+        fun hp(x: Float): Float {
+            tick(x)
+            return lastHp
+        }
+
+        fun bp(x: Float): Float {
+            tick(x)
+            return lastBp
+        }
+    }
+
+    private class Comb {
+        private var buffer = FloatArray(1)
+        private var length = 1
+        private var index = 0
+        private var store = 0f
+
+        fun ensure(size: Int) {
+            val s = size.coerceAtLeast(1)
+            if (buffer.size < s) buffer = FloatArray(s)
+            length = s
+            index = 0
+        }
+
+        fun clear() {
+            buffer.fill(0f)
+            store = 0f
+            index = 0
         }
 
         fun process(
-            x: Float,
-            ch: Int,
+            input: Float,
+            feedback: Float,
         ): Float {
-            val y = b0 * x + b1 * x1[ch] + b2 * x2[ch] - a1 * y1[ch] - a2 * y2[ch]
-            x2[ch] = x1[ch]
-            x1[ch] = x
-            y2[ch] = y1[ch]
-            y1[ch] = if (abs(y) < 1e-20f) 0f else y
-            return y
+            val out = buffer[index]
+            store = out * (1f - REVERB_DAMP) + store * REVERB_DAMP
+            if (abs(store) < 1e-25f) store = 0f
+            buffer[index] = input + store * feedback
+            if (++index >= length) index = 0
+            return out
         }
     }
 
-    private class DelayLine {
+    private class Allpass {
         private var buffer = FloatArray(1)
+        private var length = 1
         private var index = 0
 
-        fun allocate(length: Int) {
-            buffer = FloatArray(length.coerceAtLeast(1))
+        fun ensure(size: Int) {
+            val s = size.coerceAtLeast(1)
+            if (buffer.size < s) buffer = FloatArray(s)
+            length = s
             index = 0
         }
 
@@ -719,54 +1159,87 @@ class DjFxAudioProcessor(
             index = 0
         }
 
-        fun comb(
-            input: Float,
-            store: FloatArray,
-            slot: Int,
-        ): Float {
-            val out = buffer[index]
-            store[slot] = out * (1f - REVERB_DAMP) + store[slot] * REVERB_DAMP
-            buffer[index] = input + store[slot] * REVERB_FEEDBACK
-            if (++index >= buffer.size) index = 0
-            return out
-        }
-
-        fun allpass(input: Float): Float {
+        fun process(input: Float): Float {
             val buffered = buffer[index]
-            val out = -input + buffered
+            val out = buffered - input
             buffer[index] = input + buffered * 0.5f
-            if (++index >= buffer.size) index = 0
+            if (++index >= length) index = 0
             return out
         }
     }
 
+    private fun toPcm(x: Float): Short {
+        // Safety net after the limiter; only reached on sub-millisecond overshoots.
+        val y = if (abs(x) > 0.98f) (if (x > 0) 1f else -1f) * (0.98f + 0.02f * tanh((abs(x) - 0.98f) / 0.02f)) else x
+        return (y * 32768f).toInt().coerceIn(-32768, 32767).toShort()
+    }
+
+    private fun dbToGain(db: Float): Float = 10f.pow(db / 20f)
+
+    private fun nextPow2(n: Int): Int {
+        var v = 1
+        while (v < n) v = v shl 1
+        return v
+    }
+
     private companion object {
-        const val CONTROL_MASK = 63
+        val FX_BASS_DROP = DjFx.BASS_DROP.ordinal
+        val FX_STUTTER = DjFx.STUTTER.ordinal
+        val FX_BUILD_UP = DjFx.BUILD_UP.ordinal
+        val FX_DJ_DROP = DjFx.DJ_DROP.ordinal
+        val FX_QUICK_CUTS = DjFx.QUICK_CUTS.ordinal
+        val FX_ECHO_OUT = DjFx.ECHO_OUT.ordinal
+
+        const val TRANSITION_OUT = 1
+        const val TRANSITION_IN = 2
+
+        const val CONTROL_MASK = 31
+        const val HISTORY_SECONDS = 4
+        const val ECHO_SECONDS = 3
+
         const val HOPS_PER_SECOND = 100
-        const val ONSET_HISTORY = 800 // 8 seconds
+        const val ONSET_RING = 1024
+        const val RING_MASK = ONSET_RING - 1
+        const val ONSET_WINDOW = 800
         const val MIN_ANALYSIS_HOPS = 500
-        const val ANALYSIS_INTERVAL_HOPS = 200
-        const val MIN_LAG = 33 // ~182 BPM
-        const val MAX_LAG = 80 // 75 BPM
+        const val MIN_LAG = 33
+        const val MAX_LAG = 80
         const val MIN_CONFIDENCE = 0.08f
+        val LN2 = ln(2f)
 
-        const val ECHO_FEEDBACK = 0.42f
-        const val ECHO_MIX = 0.45f
+        const val SMOOTH = 0.08f
+        const val SMOOTH_FAST = 0.25f
+        const val DELAY_GLIDE = 0.02f
+        const val PROC_SLEW = 1f / 480f
+        const val LOOP_SLEW = 1f / 240f
+        const val GATE_RAMP_SECONDS = 0.0015f
 
-        const val REVERB_FEEDBACK = 0.84f
-        const val REVERB_DAMP = 0.25f
-        const val REVERB_INPUT_GAIN = 0.05f
-        const val REVERB_WET = 1.0f
+        const val STUTTER_GAIN = 1.12f
+        const val BASS_CEILING = 0.72f
+        const val BASS_ENV_RELEASE = 0.9995f
+
+        const val SUB_START_HZ = 110.0
+        const val SUB_END_HZ = 45.0
+        const val SUB_DRIVE = 1.8
+        const val SUB_LEVEL = 0.5f
+
+        const val LIMIT_CEILING = 0.89f
+        const val LIMIT_RELEASE = 0.0004f
+
+        const val ENERGY_FLOOR = 0.002f
+        const val ENERGY_DECAY = 0.999f
+
+        const val REVERB_INPUT = 0.015f
+        const val REVERB_DAMP = 0.3f
         const val STEREO_SPREAD = 23
-        val COMB_TUNING = intArrayOf(1116, 1188, 1277, 1356)
-        val ALLPASS_TUNING = intArrayOf(556, 441)
+        val COMB_TUNING = intArrayOf(1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)
+        val ALLPASS_TUNING = intArrayOf(556, 441, 341, 225)
 
-        const val SOFT_KNEE = 0.85f
-
-        val CUT_PATTERN =
-            booleanArrayOf(
-                true, true, false, true, true, false, true, false,
-                true, true, false, true, false, true, true, false,
+        val CUT_PATTERNS =
+            arrayOf(
+                booleanArrayOf(true, true, false, true, true, false, true, false, true, true, false, true, false, true, true, false),
+                booleanArrayOf(true, false, true, false, true, false, true, false, true, false, true, false, true, true, true, false),
+                booleanArrayOf(true, true, true, false, true, true, false, false, true, true, true, false, true, false, true, false),
             )
     }
 }

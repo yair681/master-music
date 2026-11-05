@@ -238,7 +238,9 @@ class DjFxAudioProcessorTest {
         val totalFrames = input.size / CH
         while (frame < totalFrames) {
             val count = minOf(CHUNK, totalFrames - frame)
-            if (fx != null && triggerAt in frame until frame + count) engine.pendingShots.add(fx)
+            if (fx != null && triggerAt in frame until frame + count) engine.enqueue(fx)
+            // Stand-in for the service's background analysis thread (once per second).
+            if (frame / SR != (frame + count) / SR) processor.runTempoAnalysis()
             val buffer = ByteBuffer.allocateDirect(count * CH * 2).order(ByteOrder.nativeOrder())
             for (i in 0 until count * CH) buffer.putShort(input[frame * CH + i])
             buffer.flip()

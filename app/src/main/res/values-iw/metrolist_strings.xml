@@ -666,4 +666,7 @@
     <string name="dj_fx_intensity">עוצמה</string>
     <string name="dj_auto_fx">אפקטים אוטומטיים</string>
     <string name="dj_smart_transitions">מעברים חכמים</string>
+    <string name="dj_fx_preset">פריסט</string>
+    <string name="dj_fx_length_beats">פעימות</string>
+    <string name="dj_fx_character">סוג</string>
 </resources>

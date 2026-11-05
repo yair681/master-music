@@ -6,9 +6,13 @@
 package com.metrolist.music.ui.screens.dj
 
 import android.os.SystemClock
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.metrolist.music.R
 import com.metrolist.music.playback.audio.DjFx
 import com.metrolist.music.playback.audio.DjFxEngine
+import com.metrolist.music.playback.audio.DjFxPreset
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -83,6 +89,7 @@ private fun DjFx.label(): String =
         DjFx.BASS_BOOST -> "BASS\nBOOST"
         DjFx.ECHO -> "ECHO"
         DjFx.REVERB -> "REVERB"
+        DjFx.ECHO_OUT -> "ECHO\nOUT"
     }
 
 @Composable
@@ -94,7 +101,10 @@ internal fun DjFxPanel(
     val ready by engine.ready.collectAsStateWithLifecycle()
     val bpm by engine.bpm.collectAsStateWithLifecycle()
     val toggles by engine.toggles.collectAsStateWithLifecycle()
-    val intensity by engine.intensity.collectAsStateWithLifecycle()
+    val preset by engine.preset.collectAsStateWithLifecycle()
+    // Read so the editor recomposes when amounts or lengths change.
+    engine.settingsVersion.collectAsStateWithLifecycle().value
+    var selected by remember { mutableStateOf(DjFx.BASS_DROP) }
     val autoFx by engine.autoFx.collectAsStateWithLifecycle()
     val smart by engine.smartTransitions.collectAsStateWithLifecycle()
     val lastEvent by engine.lastEvent.collectAsStateWithLifecycle()
@@ -121,6 +131,7 @@ internal fun DjFxPanel(
                     Brush.horizontalGradient(listOf(Blue, Teal, Purple, Pink)),
                     RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                 ).navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -187,9 +198,12 @@ internal fun DjFxPanel(
                         active = active,
                         toggle = !fx.oneShot,
                         enabled = ready,
+                        selected = fx == selected,
                         onClick = {
+                            selected = fx
                             if (fx.oneShot) engine.trigger(fx) else engine.toggle(fx)
                         },
+                        onLongClick = { selected = fx },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -197,39 +211,96 @@ internal fun DjFxPanel(
             Spacer(Modifier.height(10.dp))
         }
 
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = stringResource(R.string.dj_fx_preset),
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 13.sp,
+                modifier = Modifier.width(64.dp),
+            )
+            DjFxPreset.entries.forEach { p ->
+                Chip(
+                    text = p.name.lowercase().replaceFirstChar { it.uppercase() },
+                    selected = p == preset,
+                    color = Pink,
+                    onClick = { engine.applyPreset(p) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        val selectedColor = PadOrder.first { it.first == selected }.second
+        Text(
+            text = selected.label().replace('\n', ' '),
+            color = selectedColor,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 1.sp,
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = stringResource(R.string.dj_fx_intensity),
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = 13.sp,
-                modifier = Modifier.width(72.dp),
+                modifier = Modifier.width(64.dp),
             )
+            val amount = engine.amountOf(selected)
             Slider(
-                value = intensity,
-                onValueChange = engine::setIntensity,
+                value = amount,
+                onValueChange = { engine.setAmount(selected, it) },
                 enabled = ready,
                 colors =
                     SliderDefaults.colors(
-                        thumbColor = Pink,
-                        activeTrackColor = Purple,
+                        thumbColor = selectedColor,
+                        activeTrackColor = selectedColor,
                         inactiveTrackColor = Color.White.copy(alpha = 0.15f),
                     ),
                 modifier = Modifier.weight(1f),
             )
             Text(
-                text = "${(intensity * 100).roundToInt()}%",
+                text = "${(amount * 100).roundToInt()}%",
                 color = Color.White,
                 fontSize = 13.sp,
                 textAlign = TextAlign.End,
                 modifier = Modifier.width(44.dp),
             )
         }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = stringResource(if (selected.oneShot) R.string.dj_fx_length_beats else R.string.dj_fx_character),
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 13.sp,
+                modifier = Modifier.width(64.dp),
+            )
+            selected.optionLabels.forEachIndexed { index, label ->
+                Chip(
+                    text = label,
+                    selected = engine.optionOf(selected) == index,
+                    color = selectedColor,
+                    onClick = { engine.setOption(selected, index) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
 
         FxSwitchRow(stringResource(R.string.dj_auto_fx), autoFx, ready, engine::setAutoFx)
         FxSwitchRow(stringResource(R.string.dj_smart_transitions), smart, true, engine::setSmartTransitions)
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FxPad(
     label: String,
@@ -237,7 +308,9 @@ private fun FxPad(
     active: Boolean,
     toggle: Boolean,
     enabled: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(16.dp)
@@ -254,8 +327,11 @@ private fun FxPad(
                             color.copy(alpha = if (active) 0.45f else 0.08f),
                         ),
                     ),
-                ).border(if (active) 2.dp else 1.dp, color.copy(alpha = if (active) 1f else 0.5f), shape)
-                .clickable(enabled = enabled, onClick = onClick),
+                ).border(
+                    if (active || selected) 2.dp else 1.dp,
+                    if (selected && !active) Color.White.copy(alpha = 0.85f) else color.copy(alpha = if (active) 1f else 0.5f),
+                    shape,
+                ).combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -307,6 +383,33 @@ private fun FxSwitchRow(
                     checkedTrackColor = Purple,
                     uncheckedTrackColor = Color.White.copy(alpha = 0.1f),
                 ),
+        )
+    }
+}
+
+@Composable
+private fun Chip(
+    text: String,
+    selected: Boolean,
+    color: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier =
+            modifier
+                .clip(RoundedCornerShape(50))
+                .background(if (selected) color.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.07f))
+                .border(1.dp, color.copy(alpha = if (selected) 1f else 0.4f), RoundedCornerShape(50))
+                .clickable(onClick = onClick)
+                .padding(vertical = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
         )
     }
 }

@@ -1005,4 +1005,7 @@
     <string name="dj_fx_intensity">Intensity</string>
     <string name="dj_auto_fx">Auto FX</string>
     <string name="dj_smart_transitions">Smart transitions</string>
+    <string name="dj_fx_preset">Preset</string>
+    <string name="dj_fx_length_beats">Beats</string>
+    <string name="dj_fx_character">Type</string>
 </resources>
