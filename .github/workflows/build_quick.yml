@@ -70,7 +70,7 @@ jobs:
         run: ./gradlew --console=plain assembleFossDebug --warning-mode summary
         env:
           METROLIST_APPLICATION_ID: com.metrolist.music.test
-          METROLIST_APP_NAME: Metrolist Testing
+          METROLIST_APP_NAME: Master Code Music
           METROLIST_DEBUG_KEYSTORE_PATH: ci-debug.keystore
           PULL_REQUEST: "false"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
