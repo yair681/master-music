@@ -119,9 +119,13 @@ class DjFxAudioProcessorTest {
         // During the 1/8 roll each 1/16 slice is played twice, so the output repeats
         // itself one slice later far more often than the original music does.
         val slice = SR / 8
-        val repeatedOut = repeatFraction(output, SR * 10, SR * 12, slice)
-        val repeatedIn = repeatFraction(input, SR * 10, SR * 12, slice)
-        assertTrue("output repeat $repeatedOut vs input $repeatedIn", repeatedOut > 0.3 && repeatedIn < 0.1)
+        // The roll starts on the beat at 10.0 s or 10.5 s; 10.5-11.0 s is inside its
+        // 1/8 section either way, where half of every segment is the replayed slice.
+        val from = SR * 10 + SR / 2
+        val to = SR * 11
+        val repeatedOut = repeatFraction(output, from, to, slice)
+        val repeatedIn = repeatFraction(input, from, to, slice)
+        assertTrue("output repeat $repeatedOut vs input $repeatedIn", repeatedOut > 0.35 && repeatedIn < 0.05)
     }
 
     @Test
@@ -131,7 +135,8 @@ class DjFxAudioProcessorTest {
         engine.toggle(DjFx.ECHO)
         val input = track(seconds = 3f) + ShortArray(SR * 2 * CH)
         val output = run(input)
-        assertTrue(rms(output, SR * 3 + SR / 10, SR * 4) > 0.01)
+        val tail = rms(output, SR * 3 + SR / 10, SR * 4)
+        assertTrue("echo tail $tail", tail > 0.01)
     }
 
     @Test
@@ -141,7 +146,9 @@ class DjFxAudioProcessorTest {
         engine.toggle(DjFx.REVERB)
         val input = track(seconds = 3f) + ShortArray(SR * 2 * CH)
         val output = run(input)
-        assertTrue(rms(output, SR * 3 + SR / 20, SR * 3 + SR / 2) > 0.003)
+        val playing = rms(output, SR * 2, SR * 3)
+        val tail = rms(output, SR * 3 + SR / 20, SR * 3 + SR / 2)
+        assertTrue("reverb tail $tail vs playing $playing", tail > playing * 0.03)
     }
 
     @Test
