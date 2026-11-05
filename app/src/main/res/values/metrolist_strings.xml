@@ -994,4 +994,11 @@
     <string name="stream_source_web_creator_desc">Creator web client.</string>
     <string name="top_result">Top result</string>
     <string name="other">Other</string>
+    <string name="dj_mode">DJ Mode</string>
+    <string name="dj_exit">Exit DJ</string>
+    <string name="dj_up_next">Up next</string>
+    <string name="dj_building_set">Building your set…</string>
+    <string name="dj_live_visualizer">Live visualizer</string>
+    <string name="dj_enable_live_visualizer">Tap to sync lights to the music</string>
+    <string name="dj_unavailable_casting">DJ Mode is not available while casting</string>
 </resources>

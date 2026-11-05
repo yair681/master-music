@@ -1189,6 +1189,17 @@ fun BottomSheetPlayer(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
+                DjModeButton(
+                    containerColor = textButtonColor,
+                    contentColor = iconButtonColor,
+                    onClick = {
+                        navController.navigate("dj_mode") { launchSingleTop = true }
+                        state.collapseSoft()
+                    },
+                )
+
+                Spacer(modifier = Modifier.width(if (useNewPlayerDesign) 6.dp else 12.dp))
+
                 if (useNewPlayerDesign) {
                     val shareShape =
                         RoundedCornerShape(
@@ -2242,6 +2253,30 @@ private fun PlayerMoreMenuButton(
             painter = painterResource(R.drawable.more_horiz),
             contentDescription = null,
             colorFilter = ColorFilter.tint(iconButtonColor),
+        )
+    }
+}
+
+@Composable
+private fun DjModeButton(
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier =
+            Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(containerColor)
+                .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.graphic_eq),
+            contentDescription = stringResource(R.string.dj_mode),
+            tint = contentColor,
+            modifier = Modifier.size(24.dp),
         )
     }
 }

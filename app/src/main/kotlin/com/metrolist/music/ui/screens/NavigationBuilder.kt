@@ -113,6 +113,10 @@ fun NavGraphBuilder.navigationBuilder(
         HistoryScreen(navController)
     }
 
+    composable("dj_mode") {
+        com.metrolist.music.ui.screens.dj.DjModeScreen(navController)
+    }
+
     composable("stats") {
         StatsScreen(navController)
     }

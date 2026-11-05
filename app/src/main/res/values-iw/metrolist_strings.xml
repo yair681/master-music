@@ -655,4 +655,11 @@
     <string name="enable_paxsenix_desc">מילות שיר מתוזמנות באיכות גבוהה מ-Paxsenix API</string>
     <string name="force_bottom_navbar">אילוץ סרגל ניווט תחתון</string>
     <string name="show_most_stats_playlists">הצג רשימות השמעה שבועיות וחודשיות המושמעות ביותר</string>
+    <string name="dj_mode">מצב DJ</string>
+    <string name="dj_exit">יציאה ממצב DJ</string>
+    <string name="dj_up_next">השיר הבא</string>
+    <string name="dj_building_set">בונה את הסט…</string>
+    <string name="dj_live_visualizer">ויזואלייזר חי</string>
+    <string name="dj_enable_live_visualizer">הקש כדי לסנכרן את האורות למוזיקה</string>
+    <string name="dj_unavailable_casting">מצב DJ אינו זמין בזמן שידור למכשיר אחר</string>
 </resources>

@@ -311,6 +311,15 @@ class MusicService :
     private var crossfadeDuration = 5000f
     private var crossfadeGapless = true
     private var crossfadeMessage: PlayerMessage? = null
+    private var activeCrossfadeMs = 5000f
+
+    private val _djModeActive = MutableStateFlow(false)
+    val djModeActive = _djModeActive.asStateFlow()
+    private val djSetBuilder by lazy { DjSetBuilder(database) }
+    private val djUsedIds = LinkedHashSet<String>()
+    private var djTopUpJob: Job? = null
+    private var djSavedRepeatMode = REPEAT_MODE_OFF
+    private var djSavedShuffle = false
 
     private val secondaryPlayerListener =
         object : Player.Listener {
@@ -933,9 +942,10 @@ class MusicService :
         combine(
             dataStore.data.map { it[AudioOffload] ?: false },
             dataStore.data.map { it[CrossfadeEnabledKey] ?: false },
-        ) { offloadPref, crossfadeEnabled ->
+            djModeActive,
+        ) { offloadPref, crossfadeEnabled, djActive ->
             // Force disable offload if crossfade is enabled to prevent volume ramp issues
-            if (crossfadeEnabled) false else offloadPref
+            if (crossfadeEnabled || djActive) false else offloadPref
         }.distinctUntilChanged()
             .collectLatest(scope) { useOffload ->
                 player.setOffloadEnabled(useOffload)
@@ -1350,14 +1360,14 @@ class MusicService :
 
         if (prefs != null) {
             val offload = prefs[AudioOffload] ?: false
-            val crossfade = prefs[CrossfadeEnabledKey] ?: false
+            val crossfade = (prefs[CrossfadeEnabledKey] ?: false) || _djModeActive.value
             player.setOffloadEnabled(if (crossfade) false else offload)
             player.skipSilenceEnabled = prefs[SkipSilenceKey] ?: false
         } else {
             player.apply {
                 runBlocking {
                     val offload = dataStore.get(AudioOffload, false)
-                    val crossfade = dataStore.get(CrossfadeEnabledKey, false)
+                    val crossfade = dataStore.get(CrossfadeEnabledKey, false) || _djModeActive.value
                     setOffloadEnabled(if (crossfade) false else offload)
                     skipSilenceEnabled = dataStore.get(SkipSilenceKey, false)
                 }
@@ -1791,6 +1801,7 @@ class MusicService :
         restoringQueue: Boolean = false,
     ) {
         if (taskCleared) return
+        if (_djModeActive.value && !restoringQueue) stopDjMode()
         if (!playerInitialized.value) {
             Timber.tag(TAG).w("playQueue called before player initialization, queuing request")
             scope.launch {
@@ -2623,6 +2634,11 @@ class MusicService :
                     }
                 }
             }
+        }
+
+        if (_djModeActive.value) {
+            mediaItem?.mediaId?.let(djUsedIds::add)
+            topUpDjSet()
         }
 
         if (cachedPersistentQueue) {
@@ -4819,10 +4835,12 @@ class MusicService :
         crossfadeMessage?.cancel()
         crossfadeMessage = null
         
-        val mediaCrossfadeDuration = crossfadeDuration.toLong()
+        val djCrossfade = _djModeActive.value && listenTogetherManager.roomState.value == null
+        activeCrossfadeMs = if (djCrossfade) djCrossfadeMs() else crossfadeDuration
+        val mediaCrossfadeDuration = activeCrossfadeMs.toLong()
 
-        if (!crossfadeEnabled || crossfadeDuration <= 0f || player.duration == C.TIME_UNSET || player.duration <= mediaCrossfadeDuration) return
-        if (crossfadeGapless && isNextItemGapless()) return
+        if (!(crossfadeEnabled || djCrossfade) || activeCrossfadeMs <= 0f || player.duration == C.TIME_UNSET || player.duration <= mediaCrossfadeDuration) return
+        if (!djCrossfade && crossfadeGapless && isNextItemGapless()) return
         if (!player.hasNextMediaItem() && player.repeatMode != REPEAT_MODE_ONE) return
 
         val triggerTime = player.duration - mediaCrossfadeDuration
@@ -4840,6 +4858,106 @@ class MusicService :
             setLooper(Looper.getMainLooper())
             setPosition(triggerTime)
             send()
+        }
+    }
+
+    /** Roughly 5% of the shorter of the two tracks, kept between 4 and 10 seconds. */
+    private fun djCrossfadeMs(): Float {
+        val currentMs = player.duration.takeIf { it > 0 } ?: return DJ_DEFAULT_CROSSFADE_MS
+        val nextIndex = player.nextMediaItemIndex
+        val nextMs =
+            if (nextIndex != C.INDEX_UNSET) {
+                player.getMediaItemAt(nextIndex).metadata?.duration?.takeIf { it > 0 }?.times(1000L)
+            } else {
+                null
+            }
+        val shortest = if (nextMs != null) minOf(currentMs, nextMs) else currentMs
+        return (shortest * 0.05f).coerceIn(DJ_MIN_CROSSFADE_MS, DJ_MAX_CROSSFADE_MS)
+    }
+
+    fun startDjMode() {
+        if (_djModeActive.value || !playerInitialized.value) return
+        if (castConnectionHandler?.isCasting?.value == true) return
+        djSavedRepeatMode = player.repeatMode
+        djSavedShuffle = player.shuffleModeEnabled
+        djUsedIds.clear()
+        player.currentMediaItem?.mediaId?.let(djUsedIds::add)
+        _djModeActive.value = true
+
+        player.repeatMode = REPEAT_MODE_OFF
+        player.shuffleModeEnabled = false
+        adoptQueue(EmptyQueue, DJ_QUEUE_TITLE)
+
+        djTopUpJob?.cancel()
+        djTopUpJob =
+            scope.launch(SilentHandler) {
+                val batch = buildDjBatch(DJ_BATCH_SIZE)
+                if (!_djModeActive.value) return@launch
+                if (batch.isEmpty()) {
+                    // Library too small for a set: continue with the existing radio source.
+                    startRadioSeamlessly()
+                    return@launch
+                }
+                val hasCurrent = player.currentMediaItem != null && player.playbackState != STATE_IDLE
+                if (hasCurrent) {
+                    val currentIndex = player.currentMediaItemIndex
+                    if (player.mediaItemCount > currentIndex + 1) {
+                        player.removeMediaItems(currentIndex + 1, player.mediaItemCount)
+                    }
+                    player.addMediaItems(batch)
+                } else {
+                    player.setMediaItems(batch, 0, 0L)
+                    player.prepare()
+                    player.playWhenReady = true
+                }
+                batch.forEach { djUsedIds.add(it.mediaId) }
+                scheduleCrossfade()
+            }
+    }
+
+    fun stopDjMode() {
+        if (!_djModeActive.value) return
+        _djModeActive.value = false
+        djTopUpJob?.cancel()
+        djTopUpJob = null
+        djUsedIds.clear()
+        if (playerInitialized.value) {
+            player.repeatMode = djSavedRepeatMode
+            player.shuffleModeEnabled = djSavedShuffle
+            scheduleCrossfade()
+        }
+    }
+
+    private fun topUpDjSet() {
+        val remaining = player.mediaItemCount - player.currentMediaItemIndex - 1
+        if (remaining >= DJ_MIN_AHEAD || djTopUpJob?.isActive == true) return
+        djTopUpJob =
+            scope.launch(SilentHandler) {
+                val batch = buildDjBatch(DJ_BATCH_SIZE)
+                if (!_djModeActive.value || batch.isEmpty() || player.playbackState == STATE_IDLE) return@launch
+                player.addMediaItems(batch)
+                batch.forEach { djUsedIds.add(it.mediaId) }
+                scheduleCrossfade()
+            }
+    }
+
+    private suspend fun buildDjBatch(size: Int): List<MediaItem> {
+        val lastId =
+            if (player.mediaItemCount > 0) player.getMediaItemAt(player.mediaItemCount - 1).mediaId else null
+        val upcoming = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
+        val exclude = djUsedIds.toHashSet().apply { addAll(upcoming) }
+        return withContext(Dispatchers.IO) {
+            djSetBuilder.nextBatch(size, exclude, lastId, cachedHideExplicit, cachedHideVideoSongs)
+        }.ifEmpty {
+            // Every known song was already used in this set: start a fresh round.
+            if (djUsedIds.size > size) {
+                djUsedIds.clear()
+                withContext(Dispatchers.IO) {
+                    djSetBuilder.nextBatch(size, upcoming.toHashSet(), lastId, cachedHideExplicit, cachedHideVideoSongs)
+                }
+            } else {
+                emptyList()
+            }
         }
     }
 
@@ -4963,7 +5081,7 @@ class MusicService :
         crossfadeJob =
             scope.launch {
                 val speed = fadingPlayer?.playbackParameters?.speed?.coerceAtLeast(0.01f) ?: 1f
-                val duration = (crossfadeDuration / speed).toLong()
+                val duration = (activeCrossfadeMs / speed).toLong()
                 val steps = 20
                 val stepTime = duration / steps
                 val startVolume =
@@ -5031,6 +5149,12 @@ class MusicService :
     }
 
     companion object {
+        private const val DJ_QUEUE_TITLE = "Master DJ"
+        private const val DJ_BATCH_SIZE = 12
+        private const val DJ_MIN_AHEAD = 4
+        private const val DJ_DEFAULT_CROSSFADE_MS = 6000f
+        private const val DJ_MIN_CROSSFADE_MS = 4000f
+        private const val DJ_MAX_CROSSFADE_MS = 10000f
         const val ACTION_ALARM_TRIGGER = "com.metrolist.music.action.ALARM_TRIGGER"
         const val EXTRA_ALARM_ID = "extra_alarm_id"
         const val EXTRA_ALARM_PLAYLIST_ID = "extra_alarm_playlist_id"

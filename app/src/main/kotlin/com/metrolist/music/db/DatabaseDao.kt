@@ -146,6 +146,18 @@ interface DatabaseDao {
     suspend fun songsByCreateDateAsc(limit: Int, offset: Int): List<Song>
 
     @Transaction
+    @Query(
+        "SELECT * FROM song WHERE isEpisode = 0 " +
+            "AND (liked = 1 OR inLibrary IS NOT NULL OR totalPlayTime > 0 OR isDownloaded = 1) " +
+            "AND (duration = -1 OR duration BETWEEN 60 AND 900) " +
+            "ORDER BY RANDOM() LIMIT :limit",
+    )
+    suspend fun djCandidateSongs(limit: Int): List<Song>
+
+    @Query("SELECT songId FROM event GROUP BY songId ORDER BY MAX(timestamp) DESC LIMIT :limit")
+    suspend fun recentlyPlayedSongIds(limit: Int): List<String>
+
+    @Transaction
     @Query("SELECT * FROM song WHERE inLibrary IS NOT NULL ORDER BY title")
     fun songsByNameAsc(): Flow<List<Song>>
 
