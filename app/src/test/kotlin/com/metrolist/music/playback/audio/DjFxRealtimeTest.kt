@@ -188,8 +188,12 @@ class DjFxRealtimeTest {
                 val processor = newProcessor(engine)
                 engine.applyPreset(preset)
                 engine.toggle(DjFx.BASS_BOOST)
-                val input = music(seconds = 3f)
+                // A quieter mix, so the bass limiter (which caps loud bass to avoid
+                // distortion) does not flatten the difference between presets.
+                val input = music(seconds = 3f, scale = 0.4)
                 val out = runWithEvents(processor, input, emptyList())
+                val peak = (SR until SR * 3).maxOf { abs(out[it * CH].toInt()) } / 32768.0
+                assertTrue("$preset peaked at $peak", peak < 0.9)
                 tone(out, 80.0, SR, SR * 3) / tone(input, 80.0, SR, SR * 3)
             }
         println("DJFX bass boost at 80 Hz by preset: $ratios")
@@ -295,7 +299,10 @@ class DjFxRealtimeTest {
     }
 
     /** 120 BPM: kick, bass line, off-beat hat and a pad. */
-    private fun music(seconds: Float): ShortArray {
+    private fun music(
+        seconds: Float,
+        scale: Double = 1.0,
+    ): ShortArray {
         val frames = (SR * seconds).toInt()
         val out = ShortArray(frames * CH)
         val beat = SR / 2
@@ -307,7 +314,7 @@ class DjFxRealtimeTest {
             val hatPhase = (n + beat / 2) % beat
             val hat = if (hatPhase < SR / 50) 0.05 * sin(2 * PI * 9000.0 * n / SR) * (1 - hatPhase / (SR / 50.0)) else 0.0
             val pad = 0.06 * sin(2 * PI * 6000.0 * n / SR)
-            val s = ((kick + bass + hat + pad) * 32767).toInt().toShort()
+            val s = ((kick + bass + hat + pad) * scale * 32767).toInt().toShort()
             out[n * 2] = s
             out[n * 2 + 1] = s
         }

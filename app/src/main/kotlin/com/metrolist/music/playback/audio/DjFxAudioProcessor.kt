@@ -121,6 +121,7 @@ class DjFxAudioProcessor(
     private var hpQ = 0.707f
     private val shelfGain = Ramp(1f)
     private var bassLimit = 1f
+    private var shelfShelfHz = 100f
     private var bassEnv = 0f
     private val darkMix = Ramp(0f)
     private var darkHz = 18000f
@@ -441,18 +442,11 @@ class DjFxAudioProcessor(
             r += (hpR.hp(r) - r) * hpMixV
         }
         if (shelfV > 1.0005f) {
-            val lowL = shelfL.lp(l)
-            val lowR = shelfR.lp(r)
-            val peak = max(abs(lowL), abs(lowR))
+            l = shelfL.shelf(l)
+            r = shelfR.shelf(r)
+            // Low band level before the boost, used to keep the boost below distortion.
+            val peak = max(abs(shelfL.low), abs(shelfR.low))
             bassEnv = if (peak > bassEnv) peak else bassEnv * BASS_ENV_RELEASE
-            // Keep the boosted low band under the ceiling instead of letting it distort.
-            val allowed = if (bassEnv * shelfV > BASS_CEILING) max(1f, BASS_CEILING / bassEnv) else shelfV
-            bassLimit += (allowed - bassLimit) * 0.01f
-            val g = min(shelfV, bassLimit) - 1f
-            l += lowL * g
-            r += lowR * g
-        } else {
-            bassLimit = shelfV
         }
 
         // ---- sidechain duck + synthesized impact
@@ -658,9 +652,16 @@ class DjFxAudioProcessor(
         val targetGain = dbToGain(tShelfDb)
         shelfGain.toward(targetGain, SMOOTH)
         if (shelfGain.end > 1.0005f || shelfGain.cur > 1.0005f) {
-            shelfL.set(sr, tShelfHz, 0.707f)
+            // Bass limiter: the boosted low band may not exceed the ceiling, so the boost
+            // backs off on loud bass instead of clipping.
+            val allowed = if (bassEnv > 1e-4f) max(1f, BASS_CEILING / bassEnv) else shelfGain.end
+            bassLimit += (min(shelfGain.end, allowed) - bassLimit) * 0.3f
+            shelfShelfHz += (tShelfHz - shelfShelfHz) * SMOOTH_FAST
+            shelfL.setLowShelf(sr, shelfShelfHz, 0.707f, max(1f, bassLimit))
             shelfR.copyFrom(shelfL)
         } else {
+            bassLimit = 1f
+            bassEnv = 0f
             shelfL.clear()
             shelfR.clear()
         }
@@ -1058,6 +1059,12 @@ class DjFxAudioProcessor(
         private var ic2 = 0f
         private var lastHp = 0f
         private var lastBp = 0f
+        private var m1 = 0f
+        private var m2 = 0f
+
+        /** Low-pass state of the last sample (the band a low shelf boosts). */
+        var low = 0f
+            private set
 
         fun set(
             sampleRate: Int,
@@ -1072,7 +1079,32 @@ class DjFxAudioProcessor(
             a3 = g * a2
         }
 
+        /** Simper low shelf: DC gain [gain] (linear), unity above [hz]. */
+        fun setLowShelf(
+            sampleRate: Int,
+            hz: Float,
+            q: Float,
+            gain: Float,
+        ) {
+            val a = sqrt(gain)
+            val f = hz.coerceIn(10f, sampleRate * 0.45f)
+            val g = (tan(PI * f / sampleRate) / sqrt(a.toDouble())).toFloat()
+            k = 1f / q
+            a1 = 1f / (1f + g * (g + k))
+            a2 = g * a1
+            a3 = g * a2
+            m1 = k * (a - 1f)
+            m2 = a * a - 1f
+        }
+
+        fun shelf(x: Float): Float {
+            tick(x)
+            return x + m1 * lastBp + m2 * low
+        }
+
         fun copyFrom(other: Svf) {
+            m1 = other.m1
+            m2 = other.m2
             a1 = other.a1
             a2 = other.a2
             a3 = other.a3
@@ -1093,6 +1125,7 @@ class DjFxAudioProcessor(
             if (abs(ic1) < 1e-25f) ic1 = 0f
             if (abs(ic2) < 1e-25f) ic2 = 0f
             lastBp = v1
+            low = v2
             lastHp = v0 - k * v1 - v2
             return v2
         }
