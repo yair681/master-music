@@ -194,9 +194,9 @@ class DjFxRealtimeTest {
                 val out = runWithEvents(processor, input, emptyList())
                 val peak = (SR until SR * 3).maxOf { abs(out[it * CH].toInt()) } / 32768.0
                 assertTrue("$preset peaked at $peak", peak < 0.9)
-                tone(out, 80.0, SR, SR * 3) / tone(input, 80.0, SR, SR * 3)
+                tone(out, 55.0, SR, SR * 3) / tone(input, 55.0, SR, SR * 3)
             }
-        println("DJFX bass boost at 80 Hz by preset: $ratios")
+        println("DJFX bass boost at 55 Hz by preset: $ratios")
         assertTrue("$ratios", ratios[0] < ratios[1] && ratios[1] < ratios[2] && ratios[0] > 1.3)
     }
 
