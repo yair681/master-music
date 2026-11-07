@@ -5,6 +5,7 @@
 
 package com.metrolist.music.taste
 
+import java.time.LocalDateTime
 import kotlin.math.ln
 import kotlin.math.min
 
@@ -24,6 +25,8 @@ data class SongTaste(
     val liked: Boolean,
     val disliked: Boolean,
     val moreLikeThis: Int,
+    /** Time of the latest meaningful listen, null when never heard. */
+    val lastPlayed: LocalDateTime? = null,
 )
 
 data class ArtistTaste(
@@ -152,6 +155,7 @@ object TasteEngine {
                         liked = s.liked,
                         disliked = s.songId in dislikedSongIds,
                         moreLikeThis = s.moreLikeThis,
+                        lastPlayed = s.lastPlayed,
                     )
                 }.sortedWith(compareByDescending<SongTaste> { it.score }.thenBy { it.songId })
 

@@ -185,6 +185,12 @@ class RecommendationRepository
                 songs.associateBy { it.id } to songs.associate { it.id to it.toRecSong() }
             }
 
+        /** YouTube Music's related songs for [songId], cached for the day and filtered by [filters]. */
+        suspend fun relatedSongs(
+            songId: String,
+            filters: RecommendationFilters,
+        ): List<SongItem> = related(songId, today(), filters).songs
+
         private class Related(
             val endpoint: BrowseEndpoint?,
             val songs: List<SongItem>,
@@ -215,25 +221,6 @@ class RecommendationRepository
             )
         }
 
-        private fun SongItem.toRecSong(): RecSong<SongItem> =
-            RecSong(id, title, artists.map { RecArtist(it.id, it.name) }, this)
-
-        private fun Song.toRecSong(): RecSong<SongItem> =
-            RecSong(
-                id = id,
-                title = title,
-                artists = artists.map { RecArtist(it.id, it.name) },
-                payload =
-                    SongItem(
-                        id = id,
-                        title = title,
-                        artists = artists.map { Artist(name = it.name, id = it.id) },
-                        duration = song.duration.takeIf { it > 0 },
-                        thumbnail = thumbnailUrl.orEmpty(),
-                        explicit = song.explicit,
-                    ),
-            )
-
         companion object {
             const val MIN_LISTENED_SONGS = 5
             const val QUICK_PICKS_LIMIT = 20
@@ -247,3 +234,21 @@ class RecommendationRepository
             private const val RECENT_REPEAT_HOURS = 3L
         }
     }
+
+internal fun SongItem.toRecSong(): RecSong<SongItem> = RecSong(id, title, artists.map { RecArtist(it.id, it.name) }, this)
+
+internal fun Song.toRecSong(): RecSong<SongItem> =
+    RecSong(
+        id = id,
+        title = title,
+        artists = artists.map { RecArtist(it.id, it.name) },
+        payload =
+            SongItem(
+                id = id,
+                title = title,
+                artists = artists.map { Artist(name = it.name, id = it.id) },
+                duration = song.duration.takeIf { it > 0 },
+                thumbnail = thumbnailUrl.orEmpty(),
+                explicit = song.explicit,
+            ),
+    )

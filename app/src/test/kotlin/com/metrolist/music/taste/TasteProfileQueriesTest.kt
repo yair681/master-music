@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -102,10 +103,12 @@ class TasteProfileQueriesTest {
             assertEquals(1, a.timedSkips)
             assertEquals(20_000L, a.skipPositionMs)
             assertEquals(1, a.moreLikeThis)
+            assertEquals(now.minusDays(1), a.lastPlayed)
 
             val liked = signals.getValue("liked")
             assertTrue(liked.liked)
             assertEquals(0, liked.listens)
+            assertNull(liked.lastPlayed)
         }
 
     @Test
@@ -125,5 +128,6 @@ class TasteProfileQueriesTest {
             assertEquals(listOf("artist1"), profile.favoriteArtists.map { it.artistId })
             assertEquals(4, profile.totalListens)
             assertEquals(700_000L + 20_000L, profile.totalListeningTimeMs)
+            assertEquals(now.minusDays(1), profile.song("a")!!.lastPlayed)
         }
 }

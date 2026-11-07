@@ -24,4 +24,7 @@ fun recommendationReasonText(reason: RecommendationReason): String =
             }
         is RecommendationReason.SameArtist -> stringResource(R.string.reason_same_artist, reason.artistName)
         RecommendationReason.BasedOnListening -> stringResource(R.string.reason_based_on_listening)
+        is RecommendationReason.StyleOf -> stringResource(R.string.reason_style_of, reason.artistName)
+        is RecommendationReason.FromCategory -> stringResource(R.string.reason_from_category, reason.category)
+        is RecommendationReason.NotPlayedFor -> stringResource(R.string.reason_not_played_for, reason.days)
     }

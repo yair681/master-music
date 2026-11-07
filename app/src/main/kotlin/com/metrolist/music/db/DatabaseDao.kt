@@ -1718,13 +1718,14 @@ interface DatabaseDao {
             "COALESCE(ev.completionSum, 0.0) AS completionSum, COALESCE(ev.timedListens, 0) AS timedListens, " +
             "COALESCE(fb.skips, 0) AS skips, COALESCE(fb.skipCompletionSum, 0.0) AS skipCompletionSum, " +
             "COALESCE(fb.timedSkips, 0) AS timedSkips, COALESCE(fb.skipPositionMs, 0) AS skipPositionMs, " +
-            "COALESCE(fb.moreLikeThis, 0) AS moreLikeThis " +
+            "COALESCE(fb.moreLikeThis, 0) AS moreLikeThis, ev.lastPlayed AS lastPlayed " +
             "FROM song s " +
             "LEFT JOIN (SELECT e.songId AS songId, COUNT(*) AS listens, SUM(e.playTime) AS playMs, " +
             "SUM(CASE WHEN e.timestamp >= :recentFrom THEN 1 ELSE 0 END) AS recentListens, " +
             "SUM(CASE WHEN e.timestamp >= :midFrom AND e.timestamp < :recentFrom THEN 1 ELSE 0 END) AS midListens, " +
             "SUM(CASE WHEN s2.duration > 0 THEN MIN(1.0, e.playTime / (s2.duration * 1000.0)) ELSE 0 END) AS completionSum, " +
-            "SUM(CASE WHEN s2.duration > 0 THEN 1 ELSE 0 END) AS timedListens " +
+            "SUM(CASE WHEN s2.duration > 0 THEN 1 ELSE 0 END) AS timedListens, " +
+            "MAX(e.timestamp) AS lastPlayed " +
             "FROM event e JOIN song s2 ON s2.id = e.songId GROUP BY e.songId) ev ON ev.songId = s.id " +
             "LEFT JOIN (SELECT songId, " +
             "SUM(CASE WHEN type = 'SKIP' THEN 1 ELSE 0 END) AS skips, " +

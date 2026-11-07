@@ -5,6 +5,8 @@
 
 package com.metrolist.music.taste
 
+import java.time.LocalDateTime
+
 /**
  * Everything the device knows about one song, aggregated in SQL from `event`, `song` and
  * `song_feedback`. Only real playback data and explicit user feedback; no genre or mood guesses.
@@ -31,6 +33,8 @@ data class SongSignals(
     /** How long the user stayed in the song before skipping, summed. */
     val skipPositionMs: Long,
     val moreLikeThis: Int,
+    /** Time of the latest meaningful listen, null when the song was never heard. */
+    val lastPlayed: LocalDateTime? = null,
 )
 
 data class SongArtistLink(

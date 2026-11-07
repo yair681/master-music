@@ -30,6 +30,7 @@ import com.metrolist.music.ui.screens.artist.ArtistItemsScreen
 import com.metrolist.music.ui.screens.artist.ArtistScreen
 import com.metrolist.music.ui.screens.artist.ArtistSongsScreen
 import com.metrolist.music.ui.screens.equalizer.EqScreen
+import com.metrolist.music.ui.screens.smartplaylist.SmartPlaylistScreen
 import com.metrolist.music.ui.screens.equalizer.wizard.WizardScreen
 import com.metrolist.music.ui.screens.library.LibraryScreen
 import com.metrolist.music.ui.screens.playlist.AutoPlaylistScreen
@@ -114,6 +115,10 @@ fun NavGraphBuilder.navigationBuilder(
 
     composable("stats") {
         StatsScreen(navController)
+    }
+
+    composable("smart_playlist") {
+        SmartPlaylistScreen(navController)
     }
 
     composable("mood_and_genres") {

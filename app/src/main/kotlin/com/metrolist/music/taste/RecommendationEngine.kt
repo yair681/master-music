@@ -50,6 +50,21 @@ sealed interface RecommendationReason {
     ) : RecommendationReason
 
     data object BasedOnListening : RecommendationReason
+
+    /** Picked for a smart playlist that asked for songs in the style of this artist. */
+    data class StyleOf(
+        val artistName: String,
+    ) : RecommendationReason
+
+    /** Taken from YouTube Music playlists of this mood or genre. */
+    data class FromCategory(
+        val category: String,
+    ) : RecommendationReason
+
+    /** A song the user enjoyed but has not played for this many days. */
+    data class NotPlayedFor(
+        val days: Int,
+    ) : RecommendationReason
 }
 
 data class Recommendation<T>(
@@ -72,7 +87,7 @@ object RecommendationEngine {
     const val FAVORITE_ARTIST_REASON_MIN_SCORE = 2.0
     private const val ARTIST_BOOST_CAP = 6.0
     private const val ARTIST_BOOST = 1.5
-    private const val BLOCKED_ARTIST_SCORE = -2.0
+    const val BLOCKED_ARTIST_SCORE = -2.0
     private const val EXTRA_SEED_BONUS = 0.5
     private const val SEED_WEIGHT = 0.3
     private const val SKIPPED_SONG_MIN_SKIPS = 2
