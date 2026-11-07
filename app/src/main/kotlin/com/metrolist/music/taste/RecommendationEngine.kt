@@ -336,6 +336,55 @@ object RecommendationEngine {
         return diversify(capped, perArtist).take(limit)
     }
 
+    /**
+     * SmartQueue: refines songs that autoplay is about to add. Removes songs already in the queue,
+     * duplicates, disliked or repeatedly skipped songs and disliked artists, then re-ranks the rest by
+     * taste while keeping YouTube Music's order as the main signal. Familiar and new songs both stay.
+     */
+    fun <T> refineQueue(
+        page: List<RecSong<T>>,
+        profile: TasteProfile,
+        alreadyQueued: Set<String>,
+    ): List<RecSong<T>> {
+        if (page.isEmpty()) return page
+        val artists = ArtistLookup(profile)
+        val size = page.size
+        return page
+            .asSequence()
+            .withIndex()
+            .filter { (_, song) -> song.id !in alreadyQueued }
+            .distinctBy { (_, song) -> song.id }
+            .filter { (_, song) ->
+                val worst = artists.worst(song)
+                !isAvoided(profile.song(song.id)) && !(worst != null && worst.score <= BLOCKED_ARTIST_SCORE)
+            }.map { (index, song) ->
+                val songAffinity = (profile.song(song.id)?.score ?: 0.0).coerceIn(-2.0, 5.0) * 0.1
+                song to (1.0 - index.toDouble() / size) * 2.0 + artistBoost(artists.best(song)) * 0.5 + songAffinity
+            }.sortedByDescending { it.second }
+            .map { it.first }
+            .toList()
+    }
+
+    /**
+     * One page of the personal radio: related songs of several seeds, interleaved, then ranked like
+     * "more like this" without anything already played or queued.
+     */
+    fun <T> radioPage(
+        seed: RecSong<*>,
+        batches: List<List<RecSong<T>>>,
+        profile: TasteProfile,
+        exclude: Set<String>,
+        limit: Int = 15,
+        maxFamiliarShare: Double = 0.35,
+    ): List<Recommendation<T>> {
+        val interleaved = ArrayList<RecSong<T>>()
+        val longest = batches.maxOfOrNull { it.size } ?: 0
+        for (i in 0 until longest) {
+            for (batch in batches) batch.getOrNull(i)?.let { if (it.id !in exclude) interleaved += it }
+        }
+        return moreLikeThis(seed, interleaved, profile, limit = limit, maxFamiliarShare = maxFamiliarShare)
+    }
+
     private fun sameArtist(
         a: RecArtist,
         b: RecArtist,

@@ -169,7 +169,11 @@ import com.metrolist.music.constants.StopMusicOnTaskClearKey
 import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.db.entities.Event
 import com.metrolist.music.db.entities.FeedbackType
+import com.metrolist.music.taste.RecArtist
+import com.metrolist.music.taste.RecSong
 import com.metrolist.music.taste.RecommendationFilters
+import com.metrolist.music.playback.queues.PersonalRadioQueue
+import com.metrolist.music.constants.SmartQueueKey
 import com.metrolist.music.taste.RecommendationRepository
 import com.metrolist.music.db.entities.SongFeedback
 import com.metrolist.music.db.entities.FormatEntity
@@ -1826,6 +1830,7 @@ class MusicService :
                         .getInitialStatus()
                         .filterExplicit(dataStore.get(HideExplicitKey, false))
                         .filterVideoSongs(dataStore.get(HideVideoSongsKey, false))
+                        .let { status -> if (restoringQueue) status else smartRefineInitial(queue, status) }
                 }
             if (queue.preloadItem != null && player.playbackState == STATE_IDLE) return@launch
             if (initialStatus.title != null) {
@@ -2252,36 +2257,65 @@ class MusicService :
         }
     }
 
-    /**
-     * Records the signal, then plays the song followed by its YouTube Music related songs re-ranked by
-     * the local taste profile. Falls back to the regular radio when too few songs are left.
-     */
+    private fun recommendationFilters() =
+        RecommendationFilters(hideExplicit = cachedHideExplicit, hideVideoSongs = cachedHideVideoSongs)
+
+    /** Endless radio from [metadata], ranked on the device by the taste profile. */
+    fun startPersonalRadio(metadata: com.metrolist.music.models.MediaMetadata) {
+        playQueue(
+            PersonalRadioQueue(
+                station = metadata,
+                title = getString(R.string.more_like_song, metadata.title),
+                repository = recommendationRepository,
+                filters = ::recommendationFilters,
+            ),
+        )
+    }
+
+    /** Records the "more like this" signal and starts the personal radio from the song. */
     fun playMoreLikeThis(metadata: com.metrolist.music.models.MediaMetadata) {
         recordMoreLikeThis(metadata.id)
-        scope.launch(SilentHandler) {
-            val picks =
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        recommendationRepository.moreLikeThis(
-                            metadata,
-                            RecommendationFilters(hideExplicit = cachedHideExplicit, hideVideoSongs = cachedHideVideoSongs),
-                        )
-                    }.getOrElse {
-                        Timber.tag(TAG).w(it, "More like this failed, using radio")
-                        emptyList()
-                    }
-                }
-            val queue =
-                if (picks.size >= MORE_LIKE_THIS_MIN_PICKS) {
-                    ListQueue(
-                        title = getString(R.string.more_like_song, metadata.title),
-                        items = listOf(metadata.toMediaItem()) + picks.map { it.song.payload.toMediaItem() },
-                    )
-                } else {
-                    YouTubeQueue.radio(metadata)
-                }
-            playQueue(queue)
+        startPersonalRadio(metadata)
+    }
+
+    // SmartQueue only touches autoplay radio from YouTube Music, never a playlist or album the user chose.
+    private fun isSmartQueueTarget(queue: Queue): Boolean =
+        queue is YouTubeQueue && dataStore.get(SmartQueueKey, true)
+
+    private fun MediaItem.toRecSong(): RecSong<MediaItem>? {
+        val meta = metadata ?: return null
+        return RecSong(meta.id, meta.title, meta.artists.map { RecArtist(it.id, it.name) }, this)
+    }
+
+    private suspend fun smartRefinePage(
+        queue: Queue,
+        page: List<MediaItem>,
+    ): List<MediaItem> {
+        if (page.isEmpty() || !isSmartQueueTarget(queue)) return page
+        val queued = withContext(Dispatchers.Main) { player.mediaItems.mapTo(HashSet()) { it.mediaId } }
+        return runCatching {
+            recommendationRepository.refineQueue(page.mapNotNull { it.toRecSong() }, queued)
+        }.getOrElse {
+            Timber.tag(TAG).w(it, "SmartQueue failed, keeping the page as is")
+            page
         }
+    }
+
+    private suspend fun smartRefineInitial(
+        queue: Queue,
+        status: Queue.Status,
+    ): Queue.Status {
+        if (!isSmartQueueTarget(queue) || status.items.size <= status.mediaItemIndex + 1) return status
+        val head = status.items.subList(0, status.mediaItemIndex + 1)
+        val tail = status.items.subList(status.mediaItemIndex + 1, status.items.size)
+        val refined =
+            runCatching {
+                recommendationRepository.refineQueue(
+                    tail.mapNotNull { it.toRecSong() },
+                    head.mapTo(HashSet()) { it.mediaId },
+                )
+            }.getOrElse { tail }
+        return status.copy(items = head + refined)
     }
 
     fun recordMoreLikeThis(songId: String) {
@@ -2692,6 +2726,7 @@ class MusicService :
                             .nextPage()
                             .filterExplicit(cachedHideExplicit)
                             .filterVideoSongs(cachedHideVideoSongs)
+                            .let { page -> smartRefinePage(currentQueue, page) }
                     }
                 if (player.playbackState != STATE_IDLE && mediaItems.isNotEmpty()) {
                     player.addMediaItems(mediaItems)
@@ -5159,7 +5194,6 @@ class MusicService :
     }
 
     companion object {
-        private const val MORE_LIKE_THIS_MIN_PICKS = 5
         const val ACTION_ALARM_TRIGGER = "com.metrolist.music.action.ALARM_TRIGGER"
         const val EXTRA_ALARM_ID = "extra_alarm_id"
         const val EXTRA_ALARM_PLAYLIST_ID = "extra_alarm_playlist_id"

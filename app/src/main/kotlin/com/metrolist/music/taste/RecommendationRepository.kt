@@ -141,6 +141,29 @@ class RecommendationRepository
             return RecommendationEngine.moreLikeThis(seedRec, related.songs.map { it.toRecSong() }, profile)
         }
 
+        /** Next page of the personal radio, seeded by [seedIds] (the first one names the station). */
+        suspend fun radioPage(
+            station: MediaMetadata,
+            seedIds: List<String>,
+            exclude: Set<String>,
+            filters: RecommendationFilters,
+        ): List<Recommendation<SongItem>> {
+            val profile = profile()
+            val day = today()
+            val batches =
+                coroutineScope {
+                    seedIds.distinct().map { id -> async(Dispatchers.IO) { related(id, day, filters).songs.map { it.toRecSong() } } }.awaitAll()
+                }
+            val stationRec = RecSong(station.id, station.title, station.artists.map { RecArtist(it.id, it.name) }, Unit)
+            return RecommendationEngine.radioPage(stationRec, batches, profile, exclude)
+        }
+
+        /** SmartQueue: refines items autoplay is about to append (see [RecommendationEngine.refineQueue]). */
+        suspend fun <T> refineQueue(
+            page: List<RecSong<T>>,
+            alreadyQueued: Set<String>,
+        ): List<T> = RecommendationEngine.refineQueue(page, profile(), alreadyQueued).map { it.payload }
+
         private suspend fun recentlyPlayedIds(): Set<String> =
             withContext(Dispatchers.IO) {
                 database.songIdsPlayedSince(LocalDateTime.now().minusHours(RECENT_REPEAT_HOURS)).toSet()

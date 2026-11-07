@@ -265,4 +265,58 @@ class RecommendationEngineTest {
         assertEquals(10, picks.size)
         assertEquals(4, picks.count { !it.isNew })
     }
+
+    // ---- smart queue ----
+
+    @Test
+    fun `smart queue removes queued, duplicate, disliked and skipped songs and blocked artists`() {
+        val profile =
+            TasteEngine.build(
+                listOf(
+                    signals("disliked", listens = 2),
+                    signals("skippy", listens = 1, skips = 5),
+                    signals("h1", listens = 1),
+                    signals("h2", listens = 1),
+                ),
+                listOf(link("h1", "hated"), link("h2", "hated")),
+                setOf("disliked", "h1", "h2"),
+            )
+        val page =
+            listOf(rec("queued"), rec("a"), rec("a"), rec("disliked"), rec("skippy"), rec("byHated", "hated"), rec("b"))
+        val refined = RecommendationEngine.refineQueue(page, profile, alreadyQueued = setOf("queued"))
+        assertEquals(listOf("a", "b"), refined.map { it.id })
+    }
+
+    @Test
+    fun `smart queue keeps youtube order unless taste clearly prefers a song`() {
+        val profile =
+            TasteEngine.build(
+                listOf(signals("lovedSong", listens = 12, liked = true)),
+                listOf(link("lovedSong", "loved")),
+                emptySet(),
+            )
+        val page = listOf(rec("p1"), rec("p2"), rec("p3"), rec("p4"), rec("fromLoved", "loved"))
+        val refined = RecommendationEngine.refineQueue(page, profile, emptySet()).map { it.id }
+        assertEquals(listOf("p1", "p2", "p3"), refined.take(3))
+        assertTrue(refined.indexOf("fromLoved") < refined.indexOf("p4"))
+    }
+
+    @Test
+    fun `smart queue leaves an empty page alone`() {
+        assertTrue(RecommendationEngine.refineQueue(emptyList<RecSong<String>>(), TasteProfile.EMPTY, emptySet()).isEmpty())
+    }
+
+    // ---- personal radio ----
+
+    @Test
+    fun `radio page interleaves seeds and never repeats played songs`() {
+        val picks =
+            RecommendationEngine.radioPage(
+                seed = rec("station"),
+                batches = listOf(listOf(rec("a1"), rec("a2"), rec("played")), listOf(rec("b1"), rec("a1"))),
+                profile = TasteProfile.EMPTY,
+                exclude = setOf("station", "played"),
+            )
+        assertEquals(listOf("a1", "b1", "a2"), picks.map { it.song.id })
+    }
 }

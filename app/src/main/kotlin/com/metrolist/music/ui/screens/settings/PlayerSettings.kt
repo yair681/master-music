@@ -46,6 +46,7 @@ import com.metrolist.music.constants.CrossfadeDurationKey
 import com.metrolist.music.constants.CrossfadeEnabledKey
 import com.metrolist.music.constants.CrossfadeGaplessKey
 import com.metrolist.music.constants.AutoLoadMoreKey
+import com.metrolist.music.constants.SmartQueueKey
 import com.metrolist.music.constants.AutoRadioQueueKey
 import com.metrolist.music.constants.AutoSkipNextOnErrorKey
 import com.metrolist.music.constants.AutoplayKey
@@ -160,6 +161,10 @@ fun PlayerSettings(
 
     val (autoLoadMore, onAutoLoadMoreChange) = rememberPreference(
         AutoLoadMoreKey,
+        defaultValue = true
+    )
+    val (smartQueue, onSmartQueueChange) = rememberPreference(
+        SmartQueueKey,
         defaultValue = true
     )
     val (autoRadioQueue, onAutoRadioQueueChange) = rememberPreference(
@@ -787,6 +792,27 @@ fun PlayerSettings(
                         )
                     },
                     onClick = { onAutoLoadMoreChange(!autoLoadMore) }
+                ),
+                Material3SettingsItem(
+                    icon = painterResource(R.drawable.similar),
+                    title = { Text(stringResource(R.string.smart_queue)) },
+                    description = { Text(stringResource(R.string.smart_queue_desc)) },
+                    trailingContent = {
+                        Switch(
+                            checked = smartQueue,
+                            onCheckedChange = onSmartQueueChange,
+                            thumbContent = {
+                                Icon(
+                                    painter = painterResource(
+                                        id = if (smartQueue) R.drawable.check else R.drawable.close
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(SwitchDefaults.IconSize)
+                                )
+                            }
+                        )
+                    },
+                    onClick = { onSmartQueueChange(!smartQueue) }
                 ),
                 Material3SettingsItem(
                     icon = painterResource(R.drawable.radio),

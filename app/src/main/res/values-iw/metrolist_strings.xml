@@ -633,4 +633,7 @@
     <string name="reason_similar_to_played">כי האזנת ל־%1$s</string>
     <string name="reason_same_artist">עוד מ־%1$s</string>
     <string name="reason_based_on_listening">על בסיס ההאזנות שלך</string>
+    <string name="smart_queue">תור חכם</string>
+    <string name="smart_queue_desc">סידור השירים בניגון האוטומטי לפי הטעם שלך, בלי שירים שסימנת \"לא אוהב\" או שאתה מדלג עליהם שוב ושוב</string>
+    <string name="personal_radio">הרדיו שלי</string>
 </resources>
