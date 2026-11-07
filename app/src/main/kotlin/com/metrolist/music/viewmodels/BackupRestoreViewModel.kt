@@ -37,6 +37,7 @@ import com.metrolist.music.extensions.div
 import com.metrolist.music.extensions.tryOrNull
 import com.metrolist.music.extensions.zipInputStream
 import com.metrolist.music.extensions.zipOutputStream
+import com.metrolist.music.importer.CsvParser
 import com.metrolist.music.playback.MusicService
 import com.metrolist.music.playback.MusicService.Companion.PERSISTENT_AUTOMIX_FILE
 import com.metrolist.music.playback.MusicService.Companion.PERSISTENT_PLAYER_STATE_FILE
@@ -598,24 +599,8 @@ class BackupRestoreViewModel @Inject constructor(
         return importPlaylistFromCsv(context, uri, CsvImportState())
     }
 
-    private fun parseCsvLine(line: String): List<String> {
-        val result = mutableListOf<String>()
-        var current = StringBuilder()
-        var inQuotes = false
-
-        for (char in line) {
-            when {
-                char == '"' -> inQuotes = !inQuotes
-                char == ',' && !inQuotes -> {
-                    result.add(current.toString())
-                    current = StringBuilder()
-                }
-                else -> current.append(char)
-            }
-        }
-        result.add(current.toString())
-        return result.map { it.trim().trim('"') }
-    }
+    /** RFC 4180 fields of one line: quoted commas and doubled quotes ("") are kept as text. */
+    private fun parseCsvLine(line: String): List<String> = CsvParser.parseLine(line)
 
     fun loadM3UOnline(
         context: Context,
