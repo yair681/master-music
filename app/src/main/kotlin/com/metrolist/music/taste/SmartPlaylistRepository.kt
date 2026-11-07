@@ -140,10 +140,11 @@ class SmartPlaylistRepository
                 val all = categories().getOrElse { throw NetworkFailure() }
                 category = all.firstOrNull { it.title == request.category }
                     ?: return unavailable(SmartPlaylistFailure.CategoryNotFound(listOf(request.category)))
-            } else if (artistName != null && request.artistAmbiguous && localArtist(profile, artistName) == null) {
+            } else if (request.artist != null && request.artistAmbiguous && localArtist(profile, request.artist) == null) {
                 // "פלייליסט של רוק" names a genre, not an artist.
-                categories().getOrNull()?.firstOrNull { PlaylistBuilder.isWholeCategory(artistName!!, it.title) }?.let {
-                    category = it
+                val genre = categories().getOrNull()?.firstOrNull { PlaylistBuilder.isWholeCategory(request.artist, it.title) }
+                if (genre != null) {
+                    category = genre
                     artistName = null
                 }
             }

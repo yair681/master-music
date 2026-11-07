@@ -72,14 +72,14 @@ object PlaylistRequestParser {
     private val durationRules: List<Pair<Regex, (MatchResult) -> Double>> =
         listOf(
             Regex("(?<![\\p{N}.])$NUM\\s*-?\\s*(?:דקות|דקה|דק'|דק|minutes|minute|mins|min)$R", OPTIONS) to
-                { m -> m.groupValues[1].toDouble() },
+                { m: MatchResult -> m.groupValues[1].toDouble() },
             Regex("(?<![\\p{N}.])$NUM\\s*-?\\s*(?:שעות|שעה|hours|hour|hrs|hr)$R", OPTIONS) to
-                { m -> m.groupValues[1].toDouble() * 60 },
-            word("${HEB_PREFIX}שעה וחצי|an hour and a half|one and a half hours?|hour and a half") to { _ -> 90.0 },
-            word("${HEB_PREFIX}חצי שעה|half an hour|half-hour|half hour") to { _ -> 30.0 },
-            word("${HEB_PREFIX}רבע שעה|quarter of an hour|quarter hour") to { _ -> 15.0 },
-            word("${HEB_PREFIX}שעתיים|two hours") to { _ -> 120.0 },
-            word("${HEB_PREFIX}שעה|an hour|one hour") to { _ -> 60.0 },
+                { m: MatchResult -> m.groupValues[1].toDouble() * 60 },
+            word("${HEB_PREFIX}שעה וחצי|an hour and a half|one and a half hours?|hour and a half") to { _: MatchResult -> 90.0 },
+            word("${HEB_PREFIX}חצי שעה|half an hour|half-hour|half hour") to { _: MatchResult -> 30.0 },
+            word("${HEB_PREFIX}רבע שעה|quarter of an hour|quarter hour") to { _: MatchResult -> 15.0 },
+            word("${HEB_PREFIX}שעתיים|two hours") to { _: MatchResult -> 120.0 },
+            word("${HEB_PREFIX}שעה|an hour|one hour") to { _: MatchResult -> 60.0 },
         )
 
     private val countRule =
