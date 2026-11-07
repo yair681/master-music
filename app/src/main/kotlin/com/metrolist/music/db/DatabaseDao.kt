@@ -56,6 +56,8 @@ import com.metrolist.music.extensions.reversed
 import com.metrolist.music.extensions.toSQLiteQuery
 import com.metrolist.music.models.MediaMetadata
 import com.metrolist.music.models.toMediaMetadata
+import com.metrolist.music.taste.SongArtistLink
+import com.metrolist.music.taste.SongSignals
 import com.metrolist.music.ui.utils.resize
 import com.metrolist.music.utils.ArtistNameAliases
 import kotlinx.coroutines.flow.Flow
@@ -1708,6 +1710,43 @@ interface DatabaseDao {
 
     @Query("SELECT EXISTS($DISLIKED_SONG_IDS_SQL AND f.songId = :songId)")
     suspend fun isDislikedNow(songId: String): Boolean
+
+    @Query(
+        "SELECT s.id AS songId, s.duration AS durationSec, s.liked AS liked, " +
+            "COALESCE(ev.listens, 0) AS listens, COALESCE(ev.playMs, 0) AS playMs, " +
+            "COALESCE(ev.recentListens, 0) AS recentListens, COALESCE(ev.midListens, 0) AS midListens, " +
+            "COALESCE(ev.completionSum, 0.0) AS completionSum, COALESCE(ev.timedListens, 0) AS timedListens, " +
+            "COALESCE(fb.skips, 0) AS skips, COALESCE(fb.skipCompletionSum, 0.0) AS skipCompletionSum, " +
+            "COALESCE(fb.timedSkips, 0) AS timedSkips, COALESCE(fb.skipPositionMs, 0) AS skipPositionMs, " +
+            "COALESCE(fb.moreLikeThis, 0) AS moreLikeThis " +
+            "FROM song s " +
+            "LEFT JOIN (SELECT e.songId AS songId, COUNT(*) AS listens, SUM(e.playTime) AS playMs, " +
+            "SUM(CASE WHEN e.timestamp >= :recentFrom THEN 1 ELSE 0 END) AS recentListens, " +
+            "SUM(CASE WHEN e.timestamp >= :midFrom AND e.timestamp < :recentFrom THEN 1 ELSE 0 END) AS midListens, " +
+            "SUM(CASE WHEN s2.duration > 0 THEN MIN(1.0, e.playTime / (s2.duration * 1000.0)) ELSE 0 END) AS completionSum, " +
+            "SUM(CASE WHEN s2.duration > 0 THEN 1 ELSE 0 END) AS timedListens " +
+            "FROM event e JOIN song s2 ON s2.id = e.songId GROUP BY e.songId) ev ON ev.songId = s.id " +
+            "LEFT JOIN (SELECT songId, " +
+            "SUM(CASE WHEN type = 'SKIP' THEN 1 ELSE 0 END) AS skips, " +
+            "SUM(CASE WHEN type = 'SKIP' AND durationMs > 0 THEN MIN(1.0, positionMs * 1.0 / durationMs) ELSE 0 END) AS skipCompletionSum, " +
+            "SUM(CASE WHEN type = 'SKIP' AND durationMs > 0 THEN 1 ELSE 0 END) AS timedSkips, " +
+            "SUM(CASE WHEN type = 'SKIP' THEN COALESCE(positionMs, 0) ELSE 0 END) AS skipPositionMs, " +
+            "SUM(CASE WHEN type = 'MORE_LIKE_THIS' THEN 1 ELSE 0 END) AS moreLikeThis " +
+            "FROM song_feedback GROUP BY songId) fb ON fb.songId = s.id " +
+            "WHERE s.isEpisode = 0 AND (ev.songId IS NOT NULL OR fb.songId IS NOT NULL OR s.liked = 1)",
+    )
+    fun tasteSongSignals(
+        recentFrom: LocalDateTime,
+        midFrom: LocalDateTime,
+    ): Flow<List<SongSignals>>
+
+    @Query(
+        "SELECT m.songId AS songId, m.artistId AS artistId, a.name AS artistName, m.position AS position " +
+            "FROM song_artist_map m JOIN artist a ON a.id = m.artistId " +
+            "WHERE m.songId IN (SELECT songId FROM event UNION SELECT songId FROM song_feedback " +
+            "UNION SELECT id FROM song WHERE liked = 1)",
+    )
+    fun tasteArtistLinks(): Flow<List<SongArtistLink>>
 
     @Query("SELECT COUNT(*) FROM song_feedback WHERE songId = :songId AND type = :type")
     suspend fun feedbackCount(
