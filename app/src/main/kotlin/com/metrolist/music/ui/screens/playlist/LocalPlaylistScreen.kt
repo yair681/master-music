@@ -153,6 +153,7 @@ import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.LocalDateTime
+import com.metrolist.music.ui.theme.ThemeDefaults
 
 @SuppressLint("RememberReturnType")
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -912,7 +913,7 @@ fun LocalPlaylistHeader(
     val (darkMode, _) =
         rememberEnumPreference(
             DarkModeKey,
-            defaultValue = DarkMode.AUTO,
+            defaultValue = ThemeDefaults.darkMode,
         )
 
     val cropColor = MaterialTheme.colorScheme

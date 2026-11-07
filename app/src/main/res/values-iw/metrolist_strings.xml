@@ -531,7 +531,7 @@
     <string name="palette_blue">כחול</string>
     <string name="palette_sky_blue">שמיים כחולים</string>
     <string name="palette_cyan">טורקיז</string>
-    <string name="palette_teal">צהבהב</string>
+    <string name="palette_teal">כחול ירקרק</string>
     <string name="palette_green">ירוק</string>
     <string name="palette_light_green">ירוק בהיר</string>
     <string name="palette_lime">ירוק ליים</string>
@@ -661,4 +661,5 @@
     <string name="smart_playlist_error_no_songs">לא נמצאו שירים אמיתיים שמתאימים לבקשה.</string>
     <string name="smart_playlist_error_network">אין חיבור ל־YouTube Music. בדקו את החיבור ונסו שוב.</string>
     <string name="smart_playlist_supported">אפשר לבקש אורך (45 דקות, שעה), מספר שירים (20 שירים), אמן (בסגנון של אמן, או רק אמן אחד), שירים שאהבתם, שירים חדשים או מוכרים, שירים שלא שמעתם מזמן, או מצב רוח וסגנון.</string>
+    <string name="palette_deep_teal">טורקיז עמוק</string>
 </resources>

@@ -119,6 +119,7 @@ import com.metrolist.music.utils.rememberPreference
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
+import com.metrolist.music.ui.theme.ThemeDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,7 +130,7 @@ fun AppearanceSettings(
     val (dynamicTheme, onDynamicThemeChange) =
         rememberPreference(
             DynamicThemeKey,
-            defaultValue = true,
+            defaultValue = ThemeDefaults.DYNAMIC_THEME,
         )
     val (enableDynamicIcon, onEnableDynamicIconPrefChange) =
         rememberPreference(
@@ -154,7 +155,7 @@ fun AppearanceSettings(
     val (selectedThemeColorInt) =
         rememberPreference(
             SelectedThemeColorKey,
-            defaultValue = DefaultThemeColor.toArgb(),
+            defaultValue = ThemeDefaults.seedColor.toArgb(),
         )
     // Check if user has selected a custom color (not the default/dynamic color)
     val isUsingCustomColor = selectedThemeColorInt != DefaultThemeColor.toArgb()

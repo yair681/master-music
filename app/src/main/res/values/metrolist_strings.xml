@@ -996,4 +996,5 @@
     <string name="smart_playlist_error_no_songs">No real songs match this request.</string>
     <string name="smart_playlist_error_network">Couldn\'t reach YouTube Music. Check your connection and try again.</string>
     <string name="smart_playlist_supported">You can ask for a length (45 minutes, an hour), a number of songs (20 songs), an artist (in the style of an artist, or only one artist), songs you liked, new or familiar songs, songs you haven\'t heard in a while, or a mood or genre.</string>
+    <string name="palette_deep_teal">Deep teal</string>
 </resources>
