@@ -61,11 +61,13 @@ import com.metrolist.music.ui.menu.AddToPlaylistDialogOnline
 import com.metrolist.music.ui.menu.CsvColumnMappingDialog
 import com.metrolist.music.ui.menu.CsvImportProgressDialog
 import com.metrolist.music.ui.menu.LoadingScreen
+import com.metrolist.music.ui.menu.SpotifyImportDialog
 import com.metrolist.music.ui.utils.backToMain
 import com.metrolist.music.viewmodels.BackupPreviewInfo
 import com.metrolist.music.viewmodels.BackupRestoreViewModel
 import com.metrolist.music.viewmodels.ConvertedSongLog
 import com.metrolist.music.viewmodels.CsvImportState
+import com.metrolist.music.viewmodels.SpotifyImportViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
@@ -76,6 +78,7 @@ import java.time.format.DateTimeFormatter
 fun BackupAndRestore(
     navController: NavController,
     viewModel: BackupRestoreViewModel = hiltViewModel(),
+    spotifyImportViewModel: SpotifyImportViewModel = hiltViewModel(),
 ) {
     var importedTitle by remember { mutableStateOf("") }
     val importedSongs = remember { mutableStateListOf<Song>() }
@@ -143,10 +146,14 @@ fun BackupAndRestore(
     val importPlaylistFromCsv =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
-            pendingCsvUri = uri
-            val previewState = viewModel.previewCsvFile(context, uri)
-            csvImportState = previewState
-            showCsvColumnMapping = true
+            coroutineScope.launch {
+                // Exportify (Spotify) exports have a known layout: no column mapping needed.
+                if (spotifyImportViewModel.open(uri)) return@launch
+                pendingCsvUri = uri
+                val previewState = viewModel.previewCsvFile(context, uri)
+                csvImportState = previewState
+                showCsvColumnMapping = true
+            }
         }
     val importM3uLauncherOnline =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -290,6 +297,11 @@ fun BackupAndRestore(
             },
         )
     }
+
+    SpotifyImportDialog(
+        viewModel = spotifyImportViewModel,
+        onOpenPlaylist = { playlistId -> navController.navigate("local_playlist/$playlistId") },
+    )
 
     // CSV import progress dialog
     CsvImportProgressDialog(
