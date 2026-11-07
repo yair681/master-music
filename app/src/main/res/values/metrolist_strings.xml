@@ -822,7 +822,6 @@
     <string name="metrolist">METROLIST</string>
     <string name="wanna_play_favorite_song">Want to play their favorite song?</string>
     <string name="yeah">Yeah!</string>
-    <string name="stands_with_palestine">This project stands with Palestine 🇵🇸</string>
 
     <!-- Podcasts -->
     <string name="filter_podcasts">Podcasts</string>
@@ -1100,4 +1099,10 @@
     <string name="spotify_import_cancelled">Import cancelled. Nothing was added.</string>
     <string name="spotify_import_failed_empty">There are no songs in this file.</string>
     <string name="spotify_import_failed_save">The playlist could not be saved.</string>
+    <string name="about_developed_by">Developed by Master Code</string>
+    <string name="about_master_code">Master Code</string>
+    <string name="about_website">Website</string>
+    <string name="about_open_source">Open source</string>
+    <string name="about_based_on_metrolist">Based on Metrolist</string>
+    <string name="about_based_on_metrolist_desc">Built on the open-source Metrolist project</string>
 </resources>

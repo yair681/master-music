@@ -363,7 +363,6 @@
     <string name="wrapped_create_playlist">צור רשימת השמעה</string>
     <string name="wrapped_playlist_saved">רשימת ההשמעה נשמרה</string>
     <string name="no_profiles">אין פרופילי אקולייזר</string>
-    <string name="stands_with_palestine">הפרויקט הזה עומד לצד פלסטין 🇵🇸</string>
     <string name="system_equalizer">אקולייזר מערכת</string>
     <plurals name="band_count">
         <item quantity="one">%d פס</item>
@@ -765,4 +764,10 @@
     <string name="spotify_import_cancelled">הייבוא בוטל. שום דבר לא נוסף.</string>
     <string name="spotify_import_failed_empty">אין שירים בקובץ הזה.</string>
     <string name="spotify_import_failed_save">לא הצלחנו לשמור את הפלייליסט.</string>
+    <string name="about_developed_by">פותח על ידי מאסטר קוד</string>
+    <string name="about_master_code">מאסטר קוד</string>
+    <string name="about_website">אתר</string>
+    <string name="about_open_source">קוד פתוח</string>
+    <string name="about_based_on_metrolist">מבוסס על Metrolist</string>
+    <string name="about_based_on_metrolist_desc">נבנה על בסיס פרויקט הקוד הפתוח Metrolist</string>
 </resources>
