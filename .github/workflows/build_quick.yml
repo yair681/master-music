@@ -66,6 +66,16 @@ jobs:
           path: app/ci-debug.keystore
           key: ${{ steps.ci_keystore.outputs.cache-primary-key }}
 
+      - name: Run unit tests
+        run: ./gradlew --console=plain :app:testFossDebugUnitTest --warning-mode summary
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/
+
       - name: Build Debug APK
         run: ./gradlew --console=plain assembleFossDebug --warning-mode summary
         env:
