@@ -623,4 +623,14 @@
     <string name="remove_dislike">ביטול \"לא אוהב\"</string>
     <string name="more_like_this">עוד שירים כאלה</string>
     <string name="more_like_this_desc">השמעת שירים דומים ולמידה מהבחירה</string>
+    <string name="daily_mix">Daily Mix</string>
+    <string name="daily_mix_not_enough_data">עוד כמה האזנות וה-Daily Mix האישי שלך יופיע כאן</string>
+    <string name="more_like_song">עוד שירים כמו %1$s</string>
+    <string name="reason_liked">מהשירים שאהבת</string>
+    <string name="reason_on_repeat">השמעת אותו %1$d פעמים בחודש האחרון</string>
+    <string name="reason_favorite_artist">אתה מרבה להאזין ל־%1$s</string>
+    <string name="reason_similar_to_liked">דומה ל־%1$s, שאהבת</string>
+    <string name="reason_similar_to_played">כי האזנת ל־%1$s</string>
+    <string name="reason_same_artist">עוד מ־%1$s</string>
+    <string name="reason_based_on_listening">על בסיס ההאזנות שלך</string>
 </resources>

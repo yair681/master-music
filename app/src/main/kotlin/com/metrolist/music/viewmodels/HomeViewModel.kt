@@ -66,12 +66,28 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import javax.inject.Inject
 import kotlin.random.Random
+import com.metrolist.music.taste.Recommendation
+import com.metrolist.music.taste.RecommendationFilters
+import com.metrolist.music.taste.RecommendationReason
+import com.metrolist.music.taste.RecommendationRepository
+
+private const val MIN_PERSONAL_QUICK_PICKS = 8
 
 data class DailyDiscoverItem(
     val seed: Song,
     val recommendation: YTItem,
-    val relatedEndpoint: BrowseEndpoint?
+    val relatedEndpoint: BrowseEndpoint?,
+    /** Set when the pick comes from the personal recommendation engine. */
+    val reason: RecommendationReason? = null,
 )
+
+sealed interface DailyMixState {
+    data object NotEnoughData : DailyMixState
+
+    data class Ready(
+        val items: List<Recommendation<SongItem>>,
+    ) : DailyMixState
+}
 
 data class CommunityPlaylistItem(
     val playlist: PlaylistItem,
@@ -93,6 +109,7 @@ class HomeViewModel @Inject constructor(
     @ApplicationContext val context: Context,
     val database: MusicDatabase,
     val syncUtils: SyncUtils,
+    private val recommendations: RecommendationRepository,
     val wrappedManager: WrappedManager,
     private val wrappedAudioService: WrappedAudioService,
     private val networkConnectivity: NetworkConnectivityObserver,
@@ -106,6 +123,8 @@ class HomeViewModel @Inject constructor(
     }.distinctUntilChanged()
 
     val quickPicks = MutableStateFlow<List<Song>?>(null)
+    val quickPickReasons = MutableStateFlow<Map<String, RecommendationReason>>(emptyMap())
+    val dailyMix = MutableStateFlow<DailyMixState?>(null)
     val dailyDiscover = MutableStateFlow<List<DailyDiscoverItem>?>(null)
     val forgottenFavorites = MutableStateFlow<List<Song>?>(null)
     val keepListening = MutableStateFlow<List<LocalItem>?>(null)
@@ -271,7 +290,39 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+    private suspend fun recommendationFilters() =
+        RecommendationFilters(
+            hideExplicit = context.dataStore.get(HideExplicitKey, false),
+            hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false),
+        )
+
     private suspend fun getDailyDiscover() {
+        val profile = recommendations.profile()
+        if (recommendations.hasEnoughData(profile)) {
+            val discovery =
+                recommendations.discovery(
+                    profile = profile,
+                    filters = recommendationFilters(),
+                    shownQuickPicks = quickPicks.value.orEmpty().mapTo(HashSet()) { it.id },
+                )
+            dailyMix.value =
+                if (discovery.dailyMix.isEmpty()) DailyMixState.NotEnoughData else DailyMixState.Ready(discovery.dailyMix)
+            if (discovery.discover.isNotEmpty()) {
+                dailyDiscover.value =
+                    discovery.discover.map {
+                        DailyDiscoverItem(
+                            seed = it.seed,
+                            recommendation = it.recommendation.song.payload,
+                            relatedEndpoint = it.relatedEndpoint,
+                            reason = it.recommendation.reason,
+                        )
+                    }
+                return
+            }
+        } else {
+            dailyMix.value = DailyMixState.NotEnoughData
+        }
+
         val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
         val likedSongs = database.likedSongsByCreateDateAsc().first()
         if (likedSongs.isEmpty()) return
@@ -323,6 +374,16 @@ class HomeViewModel @Inject constructor(
         val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
         when (quickPicksEnum.first()) {
             QuickPicks.QUICK_PICKS -> {
+                val profile = recommendations.profile()
+                if (recommendations.hasEnoughData(profile)) {
+                    val personal = recommendations.quickPicks(profile, recommendationFilters())
+                    if (personal.songs.size >= MIN_PERSONAL_QUICK_PICKS) {
+                        quickPicks.value = personal.songs
+                        quickPickReasons.value = personal.reasons
+                        return
+                    }
+                }
+                quickPickReasons.value = emptyMap()
                 val relatedSongs = database.quickPicks().first().filterVideoSongs(hideVideoSongs)
                 val forgotten = database.forgottenFavorites().first().filterVideoSongs(hideVideoSongs).take(8)
 
@@ -355,6 +416,7 @@ class HomeViewModel @Inject constructor(
                 quickPicks.value = combined.ifEmpty { relatedSongs.shuffled().take(20) }
             }
             QuickPicks.LAST_LISTEN -> {
+                quickPickReasons.value = emptyMap()
                 val song = database.latestEvent().first()?.song
                 if (song != null && database.hasRelatedSongs(song.id)) {
                     quickPicks.value = database.getRelatedSongs(song.id).first().filterVideoSongs(hideVideoSongs).shuffled().take(20)

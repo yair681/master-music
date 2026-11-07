@@ -169,6 +169,8 @@ import com.metrolist.music.constants.StopMusicOnTaskClearKey
 import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.db.entities.Event
 import com.metrolist.music.db.entities.FeedbackType
+import com.metrolist.music.taste.RecommendationFilters
+import com.metrolist.music.taste.RecommendationRepository
 import com.metrolist.music.db.entities.SongFeedback
 import com.metrolist.music.db.entities.FormatEntity
 import com.metrolist.music.db.entities.LyricsEntity
@@ -272,6 +274,9 @@ class MusicService :
     @Inject
     @com.metrolist.music.di.ApplicationScope
     lateinit var applicationScope: CoroutineScope
+
+    @Inject
+    lateinit var recommendationRepository: RecommendationRepository
 
     @Inject
     lateinit var database: MusicDatabase
@@ -2244,6 +2249,38 @@ class MusicService :
                 skipNotRecordedForMediaId = song.id
                 player.seekToNext()
             }
+        }
+    }
+
+    /**
+     * Records the signal, then plays the song followed by its YouTube Music related songs re-ranked by
+     * the local taste profile. Falls back to the regular radio when too few songs are left.
+     */
+    fun playMoreLikeThis(metadata: com.metrolist.music.models.MediaMetadata) {
+        recordMoreLikeThis(metadata.id)
+        scope.launch(SilentHandler) {
+            val picks =
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        recommendationRepository.moreLikeThis(
+                            metadata,
+                            RecommendationFilters(hideExplicit = cachedHideExplicit, hideVideoSongs = cachedHideVideoSongs),
+                        )
+                    }.getOrElse {
+                        Timber.tag(TAG).w(it, "More like this failed, using radio")
+                        emptyList()
+                    }
+                }
+            val queue =
+                if (picks.size >= MORE_LIKE_THIS_MIN_PICKS) {
+                    ListQueue(
+                        title = getString(R.string.more_like_song, metadata.title),
+                        items = listOf(metadata.toMediaItem()) + picks.map { it.song.payload.toMediaItem() },
+                    )
+                } else {
+                    YouTubeQueue.radio(metadata)
+                }
+            playQueue(queue)
         }
     }
 
@@ -5122,6 +5159,7 @@ class MusicService :
     }
 
     companion object {
+        private const val MORE_LIKE_THIS_MIN_PICKS = 5
         const val ACTION_ALARM_TRIGGER = "com.metrolist.music.action.ALARM_TRIGGER"
         const val EXTRA_ALARM_ID = "extra_alarm_id"
         const val EXTRA_ALARM_PLAYLIST_ID = "extra_alarm_playlist_id"

@@ -1748,6 +1748,9 @@ interface DatabaseDao {
     )
     fun tasteArtistLinks(): Flow<List<SongArtistLink>>
 
+    @Query("SELECT DISTINCT songId FROM event WHERE timestamp >= :from")
+    suspend fun songIdsPlayedSince(from: LocalDateTime): List<String>
+
     @Query("SELECT COUNT(*) FROM song_feedback WHERE songId = :songId AND type = :type")
     suspend fun feedbackCount(
         songId: String,

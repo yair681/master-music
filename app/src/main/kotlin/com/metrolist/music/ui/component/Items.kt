@@ -1121,6 +1121,7 @@ fun MediaMetadataListItem(
 fun YouTubeListItem(
     item: YTItem,
     modifier: Modifier = Modifier,
+    subtitleOverride: String? = null,
     albumIndex: Int? = null,
     isSelected: Boolean = false,
     isActive: Boolean = false,
@@ -1163,7 +1164,7 @@ fun YouTubeListItem(
                 } else {
                     item.title
                 },
-            subtitle = when (item) {
+            subtitle = if (subtitleOverride != null) subtitleOverride else when (item) {
                 is SongItem ->
                     joinByBullet(
                         item.artists.joinToArtistString(artistSeparator) {

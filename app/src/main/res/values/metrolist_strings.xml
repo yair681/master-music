@@ -958,4 +958,14 @@
     <string name="remove_dislike">Remove dislike</string>
     <string name="more_like_this">More like this</string>
     <string name="more_like_this_desc">Play similar songs and learn from it</string>
+    <string name="daily_mix">Daily Mix</string>
+    <string name="daily_mix_not_enough_data">Listen to a few more songs and your Daily Mix will appear here</string>
+    <string name="more_like_song">More like %1$s</string>
+    <string name="reason_liked">From songs you liked</string>
+    <string name="reason_on_repeat">You played it %1$d times this month</string>
+    <string name="reason_favorite_artist">You often listen to %1$s</string>
+    <string name="reason_similar_to_liked">Similar to %1$s, which you liked</string>
+    <string name="reason_similar_to_played">Because you listened to %1$s</string>
+    <string name="reason_same_artist">More from %1$s</string>
+    <string name="reason_based_on_listening">Based on your listening history</string>
 </resources>

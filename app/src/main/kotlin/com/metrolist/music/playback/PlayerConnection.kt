@@ -35,7 +35,6 @@ import com.metrolist.music.models.MediaMetadata
 import com.metrolist.music.models.toMediaMetadata
 import com.metrolist.music.playback.MusicService.MusicBinder
 import com.metrolist.music.playback.queues.Queue
-import com.metrolist.music.playback.queues.YouTubeQueue
 import com.metrolist.music.utils.dataStore
 import com.metrolist.music.utils.get
 import com.metrolist.music.utils.reportException
@@ -340,10 +339,8 @@ class PlayerConnection(
         }
     }
 
-    /** Records the "more like this" signal and starts a radio seeded by the song. */
     fun playMoreLikeThis(metadata: MediaMetadata) {
-        service.recordMoreLikeThis(metadata.id)
-        playQueue(YouTubeQueue.radio(metadata))
+        service.playMoreLikeThis(metadata)
     }
 
     fun toggleMute() {

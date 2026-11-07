@@ -12,6 +12,8 @@ data class SongTaste(
     val songId: String,
     val score: Double,
     val listens: Int,
+    /** Meaningful listens in the last [TasteEngine.RECENT_DAYS] days. */
+    val recentListens: Int,
     /** Meaningful listening time plus the time spent in songs before skipping them. */
     val listeningTimeMs: Long,
     /** Share of the song actually heard per play, 0..1; null when the length is unknown. */
@@ -142,6 +144,7 @@ object TasteEngine {
                         songId = s.songId,
                         score = songScore(s, s.songId in dislikedSongIds),
                         listens = s.listens,
+                        recentListens = s.recentListens,
                         listeningTimeMs = s.playMs + s.skipPositionMs,
                         completionRate = completionRate(s),
                         skips = s.skips,

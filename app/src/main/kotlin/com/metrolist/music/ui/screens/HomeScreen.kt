@@ -5,6 +5,9 @@
 
 package com.metrolist.music.ui.screens
 
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import com.metrolist.music.viewmodels.DailyMixState
+import com.metrolist.music.ui.component.recommendationReasonText
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -183,6 +186,8 @@ sealed class HomeSection(
     data object QuickPicks : HomeSection("quick_picks", 90)
 
     data object DailyDiscover : HomeSection("daily_discover", 80)
+
+    data object DailyMix : HomeSection("daily_mix", 85)
 
     data object KeepListening : HomeSection("keep_listening", 50)
 
@@ -622,9 +627,10 @@ fun DailyDiscoverCard(
                             messages[kotlin.math.abs(dailyDiscover.seed.id.hashCode()) % messages.size]
                         }
 
+                    val factualReason = dailyDiscover.reason?.let { recommendationReasonText(it) }
                     Text(
                         text =
-                            stringResource(
+                            factualReason ?: stringResource(
                                 messageRes,
                                 "${dailyDiscover.seed.title} • ${dailyDiscover.seed.artists.joinToArtistString(" ${stringResource(R.string.and)} ") {
                                     ArtistNameAliases.resolve(artistNameAliases, it.id, it.name)
@@ -668,6 +674,9 @@ fun HomeScreen(
     val homePage by viewModel.homePage.collectAsStateWithLifecycle()
     val explorePage by viewModel.explorePage.collectAsStateWithLifecycle()
     val dailyDiscover by viewModel.dailyDiscover.collectAsStateWithLifecycle()
+    val dailyMix by viewModel.dailyMix.collectAsStateWithLifecycle()
+    val quickPickReasons by viewModel.quickPickReasons.collectAsStateWithLifecycle()
+    val dailyMixLazyGridState = rememberLazyGridState()
     val communityPlaylists by viewModel.communityPlaylists.collectAsStateWithLifecycle()
 
     val allLocalItems by viewModel.allLocalItems.collectAsStateWithLifecycle()
@@ -1031,6 +1040,7 @@ fun HomeScreen(
             speedDialItems,
             quickPicks,
             dailyDiscover,
+            dailyMix,
             keepListening,
             accountPlaylists,
             forgottenFavorites,
@@ -1044,6 +1054,7 @@ fun HomeScreen(
 
             if (!chipActive && speedDialItems.isNotEmpty()) list.add(HomeSection.SpeedDial)
             if (!chipActive && quickPicks?.isNotEmpty() == true) list.add(HomeSection.QuickPicks)
+            if (!chipActive && dailyMix != null) list.add(HomeSection.DailyMix)
             if (!chipActive && communityPlaylists?.isNotEmpty() == true) list.add(HomeSection.FromTheCommunity)
             if (!chipActive && dailyDiscover?.isNotEmpty() == true) list.add(HomeSection.DailyDiscover)
             if (!chipActive && keepListening?.isNotEmpty() == true) list.add(HomeSection.KeepListening)
@@ -1075,6 +1086,7 @@ fun HomeScreen(
                         when (section) {
                             HomeSection.SpeedDial,
                             HomeSection.QuickPicks,
+                            HomeSection.DailyMix,
                             HomeSection.DailyDiscover,
                             -> 500
 
@@ -1097,6 +1109,7 @@ fun HomeScreen(
                             // Range: [500-200, 500+400] = [300, 900]
                             HomeSection.SpeedDial,
                             HomeSection.QuickPicks,
+                            HomeSection.DailyMix,
                             HomeSection.DailyDiscover,
                             -> sectionRandom.nextInt(-200, 400)
 
@@ -1119,6 +1132,7 @@ fun HomeScreen(
                     mapOf(
                         HomeSection.SpeedDial to 100,
                         HomeSection.QuickPicks to 90,
+                        HomeSection.DailyMix to 85,
                         HomeSection.FromTheCommunity to 80,
                         HomeSection.DailyDiscover to 70,
                         HomeSection.KeepListening to 60,
@@ -1806,9 +1820,14 @@ fun HomeScreen(
                                                 .song(originalSong.id)
                                                 .collectAsStateWithLifecycle(initialValue = originalSong)
 
+                                            val pickReason = quickPickReasons[originalSong.id]
                                             SongListItem(
                                                 song = song!!,
                                                 showInLibraryIcon = true,
+                                                subtitleOverride =
+                                                    pickReason?.let { reason ->
+                                                        "${song!!.artists.joinToString { it.name }} • ${recommendationReasonText(reason)}"
+                                                    },
                                                 isActive = song!!.id == mediaMetadata?.id,
                                                 isPlaying = isPlaying,
                                                 isSwipeable = false,
@@ -1867,6 +1886,124 @@ fun HomeScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        HomeSection.DailyMix -> {
+                            when (val mix = dailyMix) {
+                                is DailyMixState.Ready -> {
+                                    item(key = "daily_mix_title") {
+                                        val mixTitle = stringResource(R.string.daily_mix)
+                                        NavigationTitle(
+                                            title = mixTitle,
+                                            onPlayAllClick =
+                                                if (!isListenTogetherGuest) {
+                                                    {
+                                                        playerConnection.playQueue(
+                                                            ListQueue(
+                                                                title = mixTitle,
+                                                                items = mix.items.map { it.song.payload.toMediaItem() },
+                                                            ),
+                                                        )
+                                                    }
+                                                } else {
+                                                    null
+                                                },
+                                        )
+                                    }
+                                    item(key = "daily_mix_list") {
+                                        val mixTitle = stringResource(R.string.daily_mix)
+                                        LazyHorizontalGrid(
+                                            state = dailyMixLazyGridState,
+                                            rows = GridCells.Fixed(4),
+                                            contentPadding =
+                                                WindowInsets.systemBars
+                                                    .only(WindowInsetsSides.Horizontal)
+                                                    .asPaddingValues(),
+                                            modifier =
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .height(ListItemHeight * 4),
+                                        ) {
+                                            itemsIndexed(
+                                                items = mix.items,
+                                                key = { _, rec -> "home_daily_mix_${rec.song.id}" },
+                                            ) { index, rec ->
+                                                val item = rec.song.payload
+                                                YouTubeListItem(
+                                                    item = item,
+                                                    subtitleOverride =
+                                                        "${item.artists.joinToString { it.name }} • ${recommendationReasonText(rec.reason)}",
+                                                    isActive = item.id == mediaMetadata?.id,
+                                                    isPlaying = isPlaying,
+                                                    isSwipeable = false,
+                                                    trailingContent = {
+                                                        IconButton(
+                                                            onClick = {
+                                                                menuState.show {
+                                                                    YouTubeSongMenu(
+                                                                        song = item,
+                                                                        onDismiss = menuState::dismiss,
+                                                                    )
+                                                                }
+                                                            },
+                                                        ) {
+                                                            Icon(
+                                                                painter = painterResource(R.drawable.more_vert),
+                                                                contentDescription = null,
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier =
+                                                        Modifier
+                                                            .width(horizontalLazyGridItemWidth)
+                                                            .combinedClickable(
+                                                                onClick = {
+                                                                    if (!isListenTogetherGuest) {
+                                                                        if (item.id == mediaMetadata?.id) {
+                                                                            playerConnection.togglePlayPause()
+                                                                        } else {
+                                                                            playerConnection.playQueue(
+                                                                                ListQueue(
+                                                                                    title = mixTitle,
+                                                                                    items = mix.items.map { it.song.payload.toMediaItem() },
+                                                                                    startIndex = index,
+                                                                                ),
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                },
+                                                                onLongClick = {
+                                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                    menuState.show {
+                                                                        YouTubeSongMenu(
+                                                                            song = item,
+                                                                                onDismiss = menuState::dismiss,
+                                                                        )
+                                                                    }
+                                                                },
+                                                            ),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                DailyMixState.NotEnoughData -> {
+                                    item(key = "daily_mix_title") {
+                                        NavigationTitle(title = stringResource(R.string.daily_mix))
+                                    }
+                                    item(key = "daily_mix_empty") {
+                                        Text(
+                                            text = stringResource(R.string.daily_mix_not_enough_data),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        )
+                                    }
+                                }
+
+                                null -> Unit
                             }
                         }
 
