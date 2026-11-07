@@ -13,6 +13,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Process
 import android.widget.Toast
+import androidx.datastore.preferences.core.stringPreferencesKey
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -96,6 +97,8 @@ class App :
             cachedCoilCacheSize = dataStore.data.map { it[MaxImageCacheSizeKey] ?: 512 }.first()
         }
 
+        applicationScope.launch(Dispatchers.IO) { removeLegacyTranslationPreferences() }
+
         // تهيئة إعدادات التطبيق عند الإقلاع
         applicationScope.launch {
             // Apply settings, including proxy configuration, before building extraction transport.
@@ -114,6 +117,24 @@ class App :
 
             observeSettingsChanges()
         }
+    }
+
+    // Lyrics translation (OpenRouter / DeepL) was removed; drop any API keys and settings it stored.
+    private suspend fun removeLegacyTranslationPreferences() {
+        val legacyKeys = listOf(
+            "openRouterApiKey",
+            "aiProvider",
+            "openRouterBaseUrl",
+            "openRouterModel",
+            "deeplApiKey",
+            "deeplFormality",
+            "aiSystemPrompt",
+            "translateMode",
+            "translateLanguage",
+        ).map { stringPreferencesKey(it) }
+        val stored = runCatching { dataStore.data.first() }.getOrNull() ?: return
+        if (legacyKeys.none { stored.contains(it) }) return
+        safeDataStoreEdit { settings -> legacyKeys.forEach { settings.remove(it) } }
     }
 
     private suspend fun initializeSettings() {

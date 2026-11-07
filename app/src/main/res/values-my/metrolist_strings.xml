@@ -55,9 +55,6 @@
     <string name="clear">ရှင်းရန်</string>
     <string name="copy">ကူးရန်</string>
     <string name="change">ပြောင်းရန်</string>
-    <string name="ai_lyrics_translation">AI သီချင်းစာသား ဘာသာပြန်</string>
-    <string name="ai_translating_lyrics">သီချင်းစာသားကို AI ဖြင့် ဘာသာပြန်နေသည်</string>
-    <string name="ai_lyrics_translated">သီချင်းစာသား ဘာသာပြန်ပြီးပါပြီ</string>
     <string name="recognize_music">ဂီတမှတ်သားရန်</string>
     <string name="tap_to_recognize">မှတ်သားရန် နှိပ်ပါ</string>
     <string name="listening">နားထောင်နေသည်</string>

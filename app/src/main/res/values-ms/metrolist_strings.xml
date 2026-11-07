@@ -78,11 +78,6 @@
     <string name="widget_recognizer_channel_name">Pengecaman Muzik</string>
     <string name="widget_recognizer_channel_desc">Memunculkan notifikasi sambil mengenalpasti lagu dari widget</string>
     <string name="widget_recognizer_notification_text">Merekod suara untuk mengenalpasti lagu…</string>
-    <string name="ai_provider_xai_help">Layari https://console.x.ai</string>
-    <string name="ai_provider_deepl_help">Layari https://deepl.com/pro-api untuk mendapatkan kekunci api percuma dan berbayar</string>
-    <string name="ai_deepl_formality_default">Asal</string>
-    <string name="ai_deepl_formality_more">Lebih formal</string>
-    <string name="ai_deepl_formality_less">Kurang formal</string>
     <string name="discord_status">Status</string>
     <string name="discord_status_online">Dalam talian</string>
     <string name="discord_status_idle">Melahu</string>
