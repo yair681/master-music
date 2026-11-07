@@ -389,6 +389,42 @@ fun IntelligenceScreen(
             }
         }
 
+        item(key = "insights_link") {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { navController.navigate("insights") }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.trending_up),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column(
+                    modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.insights_link),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = stringResource(R.string.insights_link_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    painter = painterResource(R.drawable.navigate_next),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         item(key = "bottom_spacer") {
             Spacer(Modifier.height(16.dp))
         }

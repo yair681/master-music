@@ -767,6 +767,14 @@ fun StatsScreen(
                 }
             } else if (!isSearching) {
                 androidx.compose.material3.IconButton(
+                    onClick = { navController.navigate("insights") },
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.trending_up),
+                        contentDescription = stringResource(R.string.insights_title),
+                    )
+                }
+                androidx.compose.material3.IconButton(
                     onClick = { isSearching = true },
                 ) {
                     Icon(
