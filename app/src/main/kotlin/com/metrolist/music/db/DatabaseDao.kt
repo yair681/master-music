@@ -56,6 +56,11 @@ import com.metrolist.music.extensions.reversed
 import com.metrolist.music.extensions.toSQLiteQuery
 import com.metrolist.music.models.MediaMetadata
 import com.metrolist.music.models.toMediaMetadata
+import com.metrolist.music.stats.ArtistPeriodTime
+import com.metrolist.music.stats.DateBucket
+import com.metrolist.music.stats.SkipSummary
+import com.metrolist.music.stats.SongPeriodStats
+import com.metrolist.music.stats.TimeBucket
 import com.metrolist.music.taste.SongArtistLink
 import com.metrolist.music.taste.SongSignals
 import com.metrolist.music.ui.utils.resize
@@ -1751,6 +1756,115 @@ interface DatabaseDao {
 
     @Query("SELECT DISTINCT songId FROM event WHERE timestamp >= :from")
     suspend fun songIdsPlayedSince(from: LocalDateTime): List<String>
+
+    // Insights. Timestamps hold the local wall-clock time encoded as UTC (see Converters), so
+    // strftime without 'localtime' already yields the local hour, weekday and date.
+    // All ranges are (from, to], like the other stats queries.
+
+    @Query(
+        "SELECT CAST(strftime('%H', timestamp / 1000, 'unixepoch') AS INTEGER) AS bucket, " +
+            "COUNT(*) AS listens, COALESCE(SUM(playTime), 0) AS playTimeMs " +
+            "FROM event WHERE timestamp > :fromTime AND timestamp <= :toTime GROUP BY bucket ORDER BY bucket",
+    )
+    suspend fun listeningByHour(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<TimeBucket>
+
+    /** Weekday buckets: 0 = Sunday ... 6 = Saturday. */
+    @Query(
+        "SELECT CAST(strftime('%w', timestamp / 1000, 'unixepoch') AS INTEGER) AS bucket, " +
+            "COUNT(*) AS listens, COALESCE(SUM(playTime), 0) AS playTimeMs " +
+            "FROM event WHERE timestamp > :fromTime AND timestamp <= :toTime GROUP BY bucket ORDER BY bucket",
+    )
+    suspend fun listeningByWeekday(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<TimeBucket>
+
+    /** Month buckets labelled `YYYY-MM`. */
+    @Query(
+        "SELECT strftime('%Y-%m', timestamp / 1000, 'unixepoch') AS label, " +
+            "COUNT(*) AS listens, COALESCE(SUM(playTime), 0) AS playTimeMs " +
+            "FROM event WHERE timestamp > :fromTime AND timestamp <= :toTime GROUP BY label ORDER BY label",
+    )
+    suspend fun listeningByMonth(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<DateBucket>
+
+    /** Day buckets labelled `YYYY-MM-DD`. */
+    @Query(
+        "SELECT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch') AS label, " +
+            "COUNT(*) AS listens, COALESCE(SUM(playTime), 0) AS playTimeMs " +
+            "FROM event WHERE timestamp > :fromTime AND timestamp <= :toTime GROUP BY label ORDER BY label",
+    )
+    suspend fun listeningByDay(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<DateBucket>
+
+    @Query("SELECT COUNT(DISTINCT songId) FROM event WHERE timestamp > :fromTime AND timestamp <= :toTime")
+    suspend fun distinctSongCount(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): Int
+
+    /** Every credited artist of the songs heard in the range. */
+    @Query(
+        "SELECT COUNT(DISTINCT m.artistId) FROM event e JOIN song_artist_map m ON m.songId = e.songId " +
+            "WHERE e.timestamp > :fromTime AND e.timestamp <= :toTime",
+    )
+    suspend fun distinctArtistCount(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): Int
+
+    /** Songs whose first-ever listen (MIN(timestamp) over the whole history) falls in the range. */
+    @Query(
+        "SELECT COUNT(*) FROM (SELECT MIN(timestamp) AS firstListen FROM event GROUP BY songId) " +
+            "WHERE firstListen > :fromTime AND firstListen <= :toTime",
+    )
+    suspend fun firstListenCount(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): Int
+
+    @Query(
+        "SELECT COUNT(*) AS skips, " +
+            "COALESCE(SUM(CASE WHEN durationMs > 0 THEN MIN(1.0, COALESCE(positionMs, 0) * 1.0 / durationMs) ELSE 0 END), 0.0) AS completionSum, " +
+            "COALESCE(SUM(CASE WHEN durationMs > 0 THEN 1 ELSE 0 END), 0) AS timedSkips " +
+            "FROM song_feedback WHERE type = 'SKIP' AND timestamp > :fromTime AND timestamp <= :toTime",
+    )
+    suspend fun skipSummary(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): SkipSummary
+
+    @Query(
+        "SELECT e.songId AS songId, COUNT(*) AS listens, COALESCE(SUM(e.playTime), 0) AS playTimeMs, " +
+            "MAX(s.liked) AS liked, " +
+            "COALESCE(SUM(CASE WHEN s.duration > 0 THEN MIN(1.0, e.playTime / (s.duration * 1000.0)) ELSE 0 END), 0.0) AS completionSum, " +
+            "SUM(CASE WHEN s.duration > 0 THEN 1 ELSE 0 END) AS timedListens " +
+            "FROM event e JOIN song s ON s.id = e.songId " +
+            "WHERE e.timestamp > :fromTime AND e.timestamp <= :toTime GROUP BY e.songId",
+    )
+    suspend fun songPeriodStats(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<SongPeriodStats>
+
+    /** Listening per main (first-credited) artist, most listened first. */
+    @Query(
+        "SELECT a.id AS artistId, a.name AS name, a.thumbnailUrl AS thumbnailUrl, COUNT(*) AS listens, COALESCE(SUM(e.playTime), 0) AS playTimeMs " +
+            "FROM event e JOIN song_artist_map m ON m.songId = e.songId AND m.position = 0 " +
+            "JOIN artist a ON a.id = m.artistId " +
+            "WHERE e.timestamp > :fromTime AND e.timestamp <= :toTime GROUP BY a.id ORDER BY playTimeMs DESC",
+    )
+    suspend fun mainArtistPeriodTime(
+        fromTime: LocalDateTime,
+        toTime: LocalDateTime,
+    ): List<ArtistPeriodTime>
 
     @Query("SELECT COUNT(*) FROM song_feedback WHERE songId = :songId AND type = :type")
     suspend fun feedbackCount(
