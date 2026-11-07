@@ -24,6 +24,20 @@ sealed class Screens(
         route = "home"
     )
 
+    object Playlists : Screens(
+        titleId = R.string.filter_playlists,
+        iconIdInactive = R.drawable.queue_music,
+        iconIdActive = R.drawable.queue_music,
+        route = "playlists"
+    )
+
+    object Intelligence : Screens(
+        titleId = R.string.intelligence_tab,
+        iconIdInactive = R.drawable.auto_awesome_outlined,
+        iconIdActive = R.drawable.auto_awesome_filled,
+        route = "intelligence"
+    )
+
     object Search : Screens(
         titleId = R.string.search,
         iconIdInactive = R.drawable.search,
@@ -46,6 +60,14 @@ sealed class Screens(
     )
 
     companion object {
-        val MainScreens = listOf(Home, Search, ListenTogether, Library)
+        /** Every top-level destination, in tab order. Listen Together comes last when it is a tab. */
+        val MainScreens: List<Screens> by lazy { listOf(Home, Playlists, Intelligence, Search, Library, ListenTogether) }
+
+        /**
+         * The tabs shown in the bottom bar or rail. Listen Together lives in the top bar by default
+         * and is a tab only when the user turned that setting off.
+         */
+        fun navigationItems(listenTogetherInTopBar: Boolean): List<Screens> =
+            if (listenTogetherInTopBar) MainScreens.filter { it != ListenTogether } else MainScreens
     }
 }

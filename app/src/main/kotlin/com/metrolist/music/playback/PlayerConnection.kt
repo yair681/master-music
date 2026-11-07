@@ -343,6 +343,15 @@ class PlayerConnection(
         service.playMoreLikeThis(metadata)
     }
 
+    /** Endless personal radio from [metadata]; blocked for a Listen Together guest like [playQueue]. */
+    fun startPersonalRadio(metadata: MediaMetadata) {
+        if (!allowInternalSync && shouldBlockPlaybackChanges?.invoke() == true) {
+            Timber.tag(TAG).d("startPersonalRadio blocked - Listen Together guest")
+            return
+        }
+        service.startPersonalRadio(metadata)
+    }
+
     fun toggleMute() {
         service.toggleMute()
     }

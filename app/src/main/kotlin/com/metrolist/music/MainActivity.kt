@@ -741,11 +741,7 @@ class MainActivity : FragmentActivity() {
                 val (listenTogetherInTopBar) = rememberPreference(ListenTogetherInTopBarKey, defaultValue = true)
                 val navigationItems =
                     remember(listenTogetherInTopBar) {
-                        if (listenTogetherInTopBar) {
-                            Screens.MainScreens.filter { it != Screens.ListenTogether }
-                        } else {
-                            Screens.MainScreens
-                        }
+                        Screens.navigationItems(listenTogetherInTopBar)
                     }
                 val routeIndexMap = remember(navigationItems) {
                     navigationItems.mapIndexed { i, s -> s.route to i }.toMap()
@@ -774,6 +770,8 @@ class MainActivity : FragmentActivity() {
                     remember {
                         listOf(
                             Screens.Home.route,
+                            Screens.Playlists.route,
+                            Screens.Intelligence.route,
                             Screens.Library.route,
                             Screens.ListenTogether.route,
                             "settings",
@@ -1014,6 +1012,8 @@ class MainActivity : FragmentActivity() {
                     remember(navBackStackEntry) {
                         when (navBackStackEntry?.destination?.route) {
                             Screens.Home.route -> R.string.home
+                            Screens.Playlists.route -> R.string.filter_playlists
+                            Screens.Intelligence.route -> R.string.intelligence_title
                             Screens.Search.route -> R.string.search
                             Screens.Library.route -> R.string.filter_library
                             Screens.ListenTogether.route -> R.string.together

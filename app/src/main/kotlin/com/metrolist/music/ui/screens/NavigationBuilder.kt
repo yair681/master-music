@@ -32,7 +32,9 @@ import com.metrolist.music.ui.screens.artist.ArtistSongsScreen
 import com.metrolist.music.ui.screens.equalizer.EqScreen
 import com.metrolist.music.ui.screens.smartplaylist.SmartPlaylistScreen
 import com.metrolist.music.ui.screens.equalizer.wizard.WizardScreen
+import com.metrolist.music.ui.screens.intelligence.IntelligenceScreen
 import com.metrolist.music.ui.screens.library.LibraryScreen
+import com.metrolist.music.ui.screens.library.PlaylistsTabScreen
 import com.metrolist.music.ui.screens.playlist.AutoPlaylistScreen
 import com.metrolist.music.ui.screens.playlist.CachePlaylistScreen
 import com.metrolist.music.ui.screens.playlist.LocalPlaylistScreen
@@ -100,6 +102,14 @@ fun NavGraphBuilder.navigationBuilder(
         LibraryScreen()
     }
 
+    composable(Screens.Playlists.route) {
+        PlaylistsTabScreen(navController)
+    }
+
+    composable(Screens.Intelligence.route) {
+        IntelligenceScreen(navController)
+    }
+
     composable(Screens.ListenTogether.route) {
         ListenTogetherScreen(navController, showTopBar = false)
     }
@@ -118,8 +128,21 @@ fun NavGraphBuilder.navigationBuilder(
         StatsScreen(navController)
     }
 
-    composable("smart_playlist") {
-        SmartPlaylistScreen(navController)
+    composable(
+        route = "smart_playlist?prompt={prompt}",
+        arguments =
+            listOf(
+                navArgument("prompt") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+    ) { backStackEntry ->
+        SmartPlaylistScreen(
+            navController = navController,
+            initialPrompt = backStackEntry.arguments?.getString("prompt"),
+        )
     }
 
     composable("mood_and_genres") {

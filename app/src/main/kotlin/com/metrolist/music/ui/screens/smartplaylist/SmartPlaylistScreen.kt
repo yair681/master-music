@@ -80,6 +80,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SmartPlaylistScreen(
     navController: NavController,
+    initialPrompt: String? = null,
     viewModel: SmartPlaylistViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -104,6 +105,16 @@ fun SmartPlaylistScreen(
     fun generate(request: String) {
         focusManager.clearFocus()
         viewModel.generate(request)
+    }
+
+    // A prompt handed over by another screen (the example chips on the intelligence screen) runs once.
+    var initialPromptHandled by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(initialPrompt) {
+        if (!initialPromptHandled && !initialPrompt.isNullOrBlank()) {
+            initialPromptHandled = true
+            text = initialPrompt
+            generate(initialPrompt)
+        }
     }
 
     val examples =
