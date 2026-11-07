@@ -687,5 +687,9 @@
     <string name="intelligence_item_stats">האזנות: %1$s · %2$s</string>
     <string name="intelligence_stats_link">סטטיסטיקה מפורטת</string>
     <string name="intelligence_stats_link_desc">השירים, האמנים והאלבומים שהושמעו הכי הרבה לפי תקופה</string>
+    <string name="greeting_morning">בוקר טוב</string>
+    <string name="greeting_afternoon">צהריים טובים</string>
+    <string name="greeting_evening">ערב טוב</string>
+    <string name="greeting_night">לילה טוב</string>
     <string name="palette_deep_teal">טורקיז עמוק</string>
 </resources>

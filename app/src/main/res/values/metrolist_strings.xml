@@ -1022,5 +1022,9 @@
     <string name="intelligence_item_stats">Listens: %1$s · %2$s</string>
     <string name="intelligence_stats_link">Detailed stats</string>
     <string name="intelligence_stats_link_desc">Most played songs, artists and albums by period</string>
+    <string name="greeting_morning">Good morning</string>
+    <string name="greeting_afternoon">Good afternoon</string>
+    <string name="greeting_evening">Good evening</string>
+    <string name="greeting_night">Good night</string>
     <string name="palette_deep_teal">Deep teal</string>
 </resources>

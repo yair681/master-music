@@ -66,6 +66,7 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -139,6 +140,7 @@ import com.metrolist.music.playback.queues.YouTubeAlbumRadio
 import com.metrolist.music.playback.queues.YouTubeQueue
 import com.metrolist.music.ui.component.AlbumGridItem
 import com.metrolist.music.ui.component.ArtistGridItem
+import com.metrolist.music.ui.utils.DayPart
 import com.metrolist.music.ui.component.ChipsRow
 import com.metrolist.music.ui.component.HideOnScrollFAB
 import com.metrolist.music.ui.component.LocalBottomSheetPageState
@@ -1203,6 +1205,12 @@ fun HomeScreen(
                 state = lazylistState,
                 contentPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues(),
             ) {
+                if (selectedChip == null) {
+                    item(key = "greeting") {
+                        HomeGreeting()
+                    }
+                }
+
                 item {
                     ChipsRow(
                         chips = homePage?.chips?.map { it to it.title } ?: emptyList(),
@@ -2747,4 +2755,22 @@ fun HomeScreen(
             )
         }
     }
+}
+
+/** Time-of-day greeting from the device clock; it follows the clock while Home stays open. */
+@Composable
+private fun HomeGreeting() {
+    var hour by remember { mutableIntStateOf(java.time.LocalTime.now().hour) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            hour = java.time.LocalTime.now().hour
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }
+    Text(
+        text = stringResource(DayPart.forHour(hour).greetingRes),
+        style = MaterialTheme.typography.headlineSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+    )
 }
