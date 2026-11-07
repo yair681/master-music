@@ -168,6 +168,8 @@ import com.metrolist.music.constants.SkipSilenceKey
 import com.metrolist.music.constants.StopMusicOnTaskClearKey
 import com.metrolist.music.db.MusicDatabase
 import com.metrolist.music.db.entities.Event
+import com.metrolist.music.db.entities.FeedbackType
+import com.metrolist.music.db.entities.SongFeedback
 import com.metrolist.music.db.entities.FormatEntity
 import com.metrolist.music.db.entities.LyricsEntity
 import com.metrolist.music.db.entities.PlaylistEntity
@@ -2222,6 +2224,44 @@ class MusicService :
         }
     }
 
+    /** Marks the current song as disliked (or clears it), unlikes it, and moves on to the next song. */
+    fun toggleDislike() {
+        scope.launch {
+            val song = currentSong.first()?.song ?: return@launch
+            if (song.isEpisode) return@launch
+            val disliked = withContext(Dispatchers.IO) { database.isDislikedNow(song.id) }
+            val feedback =
+                SongFeedback(
+                    songId = song.id,
+                    type = if (disliked) FeedbackType.UNDISLIKE else FeedbackType.DISLIKE,
+                    timestamp = LocalDateTime.now(),
+                )
+            database.query { insert(feedback) }
+            if (disliked) return@launch
+
+            if (song.liked) toggleLike()
+            if (player.currentMediaItem?.mediaId == song.id && player.hasNextMediaItem()) {
+                skipNotRecordedForMediaId = song.id
+                player.seekToNext()
+            }
+        }
+    }
+
+    fun recordMoreLikeThis(songId: String) {
+        val feedback =
+            SongFeedback(
+                songId = songId,
+                type = FeedbackType.MORE_LIKE_THIS,
+                timestamp = LocalDateTime.now(),
+            )
+        database.query {
+            try {
+                insert(feedback)
+            } catch (_: SQLException) {
+            }
+        }
+    }
+
     fun addToTargetPlaylist() {
         scope.launch {
             val currentSong = currentSong.first() ?: return@launch
@@ -4070,10 +4110,14 @@ class MusicService :
         eventTime: AnalyticsListener.EventTime,
         playbackStats: PlaybackStats,
     ) {
-        val mediaItem = eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem
-        val historyDurationMs = dataStore[HistoryDuration]?.times(1000f) ?: 30000f
+        val window = eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window())
+        val mediaItem = window.mediaItem
+        val historyDurationMs = (dataStore[HistoryDuration]?.times(1000f) ?: 30000f).toLong()
+        val durationMs =
+            window.durationMs.takeIf { it != C.TIME_UNSET && it > 0 }
+                ?: mediaItem.metadata?.duration?.takeIf { it > 0 }?.times(1000L)
 
-        if (playbackStats.totalPlayTimeMs >= historyDurationMs &&
+        if (ListenSignals.isMeaningfulListen(playbackStats.totalPlayTimeMs, durationMs, historyDurationMs) &&
             !dataStore.get(PauseListenHistoryKey, false)
         ) {
             database.query {
@@ -4812,6 +4856,53 @@ class MusicService :
     ) {
         if (reason == Player.DISCONTINUITY_REASON_SEEK) {
             scheduleCrossfade()
+            recordSkipIfNeeded(oldPosition, newPosition)
+        }
+    }
+
+    // Set right before the service itself moves on (after a dislike), so that move is not logged as a skip.
+    private var skipNotRecordedForMediaId: String? = null
+
+    private fun recordSkipIfNeeded(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+    ) {
+        if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex) return
+        val leftItem = oldPosition.mediaItem ?: return
+        if (skipNotRecordedForMediaId == leftItem.mediaId) {
+            skipNotRecordedForMediaId = null
+            return
+        }
+        if (historyPaused) return
+        val metadata = leftItem.metadata ?: return
+        if (metadata.isEpisode) return
+
+        val timeline = player.currentTimeline
+        val movedToNextSong =
+            !timeline.isEmpty &&
+                oldPosition.mediaItemIndex < timeline.windowCount &&
+                timeline.getNextWindowIndex(
+                    oldPosition.mediaItemIndex,
+                    if (player.repeatMode == REPEAT_MODE_ONE) Player.REPEAT_MODE_ALL else player.repeatMode,
+                    player.shuffleModeEnabled,
+                ) == newPosition.mediaItemIndex
+        val durationMs = metadata.duration.takeIf { it > 0 }?.times(1000L)
+        if (!ListenSignals.isSkip(oldPosition.positionMs, durationMs, historyDurationMs, movedToNextSong)) return
+
+        val feedback =
+            SongFeedback(
+                songId = leftItem.mediaId,
+                type = FeedbackType.SKIP,
+                timestamp = LocalDateTime.now(),
+                positionMs = oldPosition.positionMs,
+                durationMs = durationMs,
+            )
+        database.query {
+            try {
+                insert(feedback)
+            } catch (_: SQLException) {
+                // The song row may not exist yet (foreign key); a lost skip is harmless.
+            }
         }
     }
 

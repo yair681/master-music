@@ -87,6 +87,12 @@ jobs:
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
 
+      - name: Upload Room schemas
+        uses: actions/upload-artifact@v7
+        with:
+          name: room-schemas
+          path: app/schemas/
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
         with:

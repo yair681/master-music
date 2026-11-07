@@ -614,6 +614,24 @@ fun SongMenu(
                         } else {
                             null
                         },
+                        if (!isGuest && !song.song.isEpisode) {
+                            Material3MenuItemData(
+                                title = { Text(text = stringResource(R.string.more_like_this)) },
+                                description = { Text(text = stringResource(R.string.more_like_this_desc)) },
+                                icon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.similar),
+                                        contentDescription = null,
+                                    )
+                                },
+                                onClick = {
+                                    onDismiss()
+                                    playerConnection.playMoreLikeThis(song.toMediaMetadata())
+                                },
+                            )
+                        } else {
+                            null
+                        },
                         if (!isGuest) {
                             Material3MenuItemData(
                                 title = { Text(text = stringResource(R.string.play_next)) },

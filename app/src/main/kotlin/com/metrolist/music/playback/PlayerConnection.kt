@@ -31,9 +31,11 @@ import com.metrolist.music.extensions.getQueueWindows
 import com.metrolist.music.extensions.metadata
 import com.metrolist.music.extensions.togglePlayPause
 import com.metrolist.music.extensions.withUpdatedMetadata
+import com.metrolist.music.models.MediaMetadata
 import com.metrolist.music.models.toMediaMetadata
 import com.metrolist.music.playback.MusicService.MusicBinder
 import com.metrolist.music.playback.queues.Queue
+import com.metrolist.music.playback.queues.YouTubeQueue
 import com.metrolist.music.utils.dataStore
 import com.metrolist.music.utils.get
 import com.metrolist.music.utils.reportException
@@ -43,6 +45,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -168,6 +171,10 @@ class PlayerConnection(
         mediaMetadata.flatMapLatest {
             database.song(it?.id)
         }.stateIn(scope, SharingStarted.Lazily, null)
+    val isCurrentDisliked =
+        mediaMetadata.flatMapLatest { metadata ->
+            if (metadata == null) flowOf(false) else database.isDisliked(metadata.id)
+        }.stateIn(scope, SharingStarted.Lazily, false)
     val currentLyrics =
         mediaMetadata.flatMapLatest { mediaMetadata ->
             database.lyrics(mediaMetadata?.id)
@@ -323,6 +330,20 @@ class PlayerConnection(
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error in toggleLike")
         }
+    }
+
+    fun toggleDislike() {
+        try {
+            service.toggleDislike()
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in toggleDislike")
+        }
+    }
+
+    /** Records the "more like this" signal and starts a radio seeded by the song. */
+    fun playMoreLikeThis(metadata: MediaMetadata) {
+        service.recordMoreLikeThis(metadata.id)
+        playQueue(YouTubeQueue.radio(metadata))
     }
 
     fun toggleMute() {

@@ -93,6 +93,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -324,6 +326,7 @@ fun BottomSheetPlayer(
     val playbackState by playerConnection.playbackState.collectAsState()
     val mediaMetadata by playerConnection.mediaMetadata.collectAsState()
     val currentSong by playerConnection.currentSong.collectAsStateWithLifecycle(initialValue = null)
+    val isCurrentDisliked by playerConnection.isCurrentDisliked.collectAsStateWithLifecycle()
     val automix by playerConnection.service.automixItems.collectAsStateWithLifecycle()
     val repeatMode by playerConnection.repeatMode.collectAsStateWithLifecycle()
     val canSkipPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
@@ -1212,6 +1215,15 @@ fun BottomSheetPlayer(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (currentSong?.song?.isEpisode != true) {
+                            DislikeButton(
+                                isDisliked = isCurrentDisliked,
+                                containerColor = textButtonColor,
+                                contentColor = iconButtonColor,
+                                size = 42.dp,
+                                onClick = playerConnection::toggleDislike,
+                            )
+                        }
                         AnimatedContent(targetState = showInlineLyrics, label = "ShareButton") { showLyrics ->
                             if (showLyrics) {
                                 FilledIconButton(
@@ -1327,6 +1339,16 @@ fun BottomSheetPlayer(
                         }
                     }
                 } else {
+                    if (currentSong?.song?.isEpisode != true) {
+                        DislikeButton(
+                            isDisliked = isCurrentDisliked,
+                            containerColor = textButtonColor,
+                            contentColor = iconButtonColor,
+                            size = 40.dp,
+                            onClick = playerConnection::toggleDislike,
+                        )
+                        Spacer(modifier = Modifier.size(12.dp))
+                    }
                     AnimatedContent(targetState = showInlineLyrics, label = "ShareButton") { showLyrics ->
                         if (showLyrics) {
                             Box(
@@ -2242,6 +2264,32 @@ private fun PlayerMoreMenuButton(
             painter = painterResource(R.drawable.more_horiz),
             contentDescription = null,
             colorFilter = ColorFilter.tint(iconButtonColor),
+        )
+    }
+}
+
+@Composable
+private fun DislikeButton(
+    isDisliked: Boolean,
+    containerColor: Color,
+    contentColor: Color,
+    size: Dp,
+    onClick: () -> Unit,
+) {
+    FilledIconButton(
+        onClick = onClick,
+        shape = CircleShape,
+        colors =
+            IconButtonDefaults.filledIconButtonColors(
+                containerColor = containerColor,
+                contentColor = contentColor,
+            ),
+        modifier = Modifier.size(size),
+    ) {
+        Icon(
+            painter = painterResource(if (isDisliked) R.drawable.thumb_down_filled else R.drawable.thumb_down),
+            contentDescription = stringResource(if (isDisliked) R.string.remove_dislike else R.string.dislike_song),
+            modifier = Modifier.size(22.dp),
         )
     }
 }

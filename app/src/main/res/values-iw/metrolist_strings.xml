@@ -619,4 +619,8 @@
     <string name="enable_paxsenix_desc">מילות שיר מתוזמנות באיכות גבוהה מ-Paxsenix API</string>
     <string name="force_bottom_navbar">אילוץ סרגל ניווט תחתון</string>
     <string name="show_most_stats_playlists">הצג רשימות השמעה שבועיות וחודשיות המושמעות ביותר</string>
+    <string name="dislike_song">לא אוהב את השיר</string>
+    <string name="remove_dislike">ביטול \"לא אוהב\"</string>
+    <string name="more_like_this">עוד שירים כאלה</string>
+    <string name="more_like_this_desc">השמעת שירים דומים ולמידה מהבחירה</string>
 </resources>

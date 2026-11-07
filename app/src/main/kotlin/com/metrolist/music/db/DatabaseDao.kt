@@ -50,6 +50,7 @@ import com.metrolist.music.db.entities.Song
 import com.metrolist.music.db.entities.SongAlbumMap
 import com.metrolist.music.db.entities.SongArtistMap
 import com.metrolist.music.db.entities.SongEntity
+import com.metrolist.music.db.entities.SongFeedback
 import com.metrolist.music.db.entities.SongWithStats
 import com.metrolist.music.extensions.reversed
 import com.metrolist.music.extensions.toSQLiteQuery
@@ -65,6 +66,15 @@ import java.text.Collator
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.Locale
+
+// A song is disliked when its latest DISLIKE/UNDISLIKE entry is DISLIKE and it was not liked
+// afterwards. Liking happens in many places (menus, sync, widgets), so it is resolved here.
+private const val DISLIKED_SONG_IDS_SQL =
+    "SELECT f.songId FROM song_feedback f JOIN song s ON s.id = f.songId " +
+        "WHERE f.type = 'DISLIKE' " +
+        "AND f.id = (SELECT MAX(f2.id) FROM song_feedback f2 " +
+        "WHERE f2.songId = f.songId AND f2.type IN ('DISLIKE', 'UNDISLIKE')) " +
+        "AND NOT (s.liked = 1 AND s.likedDate IS NOT NULL AND s.likedDate > f.timestamp)"
 
 /**
  * Helloo! Note from a dev:
@@ -1686,6 +1696,24 @@ interface DatabaseDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insert(event: Event)
+
+    @Insert
+    fun insert(feedback: SongFeedback)
+
+    @Query(DISLIKED_SONG_IDS_SQL)
+    fun dislikedSongIds(): Flow<List<String>>
+
+    @Query("SELECT EXISTS($DISLIKED_SONG_IDS_SQL AND f.songId = :songId)")
+    fun isDisliked(songId: String): Flow<Boolean>
+
+    @Query("SELECT EXISTS($DISLIKED_SONG_IDS_SQL AND f.songId = :songId)")
+    suspend fun isDislikedNow(songId: String): Boolean
+
+    @Query("SELECT COUNT(*) FROM song_feedback WHERE songId = :songId AND type = :type")
+    suspend fun feedbackCount(
+        songId: String,
+        type: String,
+    ): Int
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insert(map: RelatedSongMap)

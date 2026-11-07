@@ -954,4 +954,8 @@
     <string name="stream_source_web_creator_desc">Creator web client.</string>
     <string name="top_result">Top result</string>
     <string name="other">Other</string>
+    <string name="dislike_song">Don\'t like this song</string>
+    <string name="remove_dislike">Remove dislike</string>
+    <string name="more_like_this">More like this</string>
+    <string name="more_like_this_desc">Play similar songs and learn from it</string>
 </resources>
